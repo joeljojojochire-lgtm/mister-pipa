@@ -4,42 +4,39 @@ from config import MARQUEE_TEXT, PIPA_EMOJIS
 
 def render_game(game, event_text="", pipa_mood="default"):
     """
-    Renderiza la interfaz visual 2.0 del juego.
+    Renderiza la interfaz visual 2.0 del juego (Solo Texto).
     """
     # 1. Banner Animado (Marquee)
-    # Cambia ligeramente la posición según la ronda para simular movimiento
     shift = game.rounds % 4
     marquee = (" " * shift) + MARQUEE_TEXT
     
-    # 2. El Tablero Visual (Pista de Carreras en bloque de código)
-    track_width = 15 # Longitud visual de la pista
+    # 2. El Tablero Visual (Pista de Carreras)
+    track_width = 15 
     board = "<code>"
     board += "╔═══════════════════════════╗\n"
     
-    # Renderizamos a los jugadores en el orden de la partida
     for pid in game.order:
         p = game.players[pid]
-        emoji = p.get("emoji", "🏃") # Usa emoji personalizado o el default
+        emoji = p.get("emoji", "🏃")
         
-        # Calcular posición visual (regla de 3 simple sobre el ancho de pista)
+        # Posición visual calculada
         pos_visual = int((p['pos'] / game.max_pos) * track_width)
         pos_visual = max(0, min(track_width, pos_visual))
         
-        # Formatear nombre (máximo 8 caracteres para no romper el marco)
+        # Formatear nombre
         name_display = (p['name'][:6] + "..") if len(p['name']) > 8 else p['name'].ljust(8)
         
-        # Dibujar carril
+        # Dibujar carril (Puntos para el camino, Emojis para los corredores)
         lane = "." * pos_visual + emoji + "." * (track_width - pos_visual)
         board += f"║ {name_display}: {lane}🥅 ║\n"
         
     board += "╚═══════════════════════════╝</code>"
 
     # 3. Narrativa de Mister Pipa
-    # Elegimos el emoji de Pipa según el contexto (mood)
     pipa_icon = PIPA_EMOJIS.get(pipa_mood, "😀")
     
     if not event_text:
-        event_text = "¡Bienvenidos al Show! La pista está que arde."
+        event_text = "¡El Show continúa! Nadie se rinde."
 
     narrative = f"{pipa_icon} **MISTER PIPA DICE:**\n_{event_text}_"
 
@@ -48,47 +45,36 @@ def render_game(game, event_text="", pipa_mood="default"):
     stats = f"\n\n🪙 **Tus Monedas:** {current['coins']} | 🏁 **Meta:** {game.max_pos}m"
     footer = f"\n👉 Turno de: **{current['name']}**"
 
-    # Combinamos todo para el Caption Multimedia
     return f"{marquee}\n\n{board}\n{narrative}{stats}{footer}"
 
 
 # =========================================================
-# TECLADOS (Se mantienen según REGLA DE ORO)
-# ==========================
+# TECLADOS (SIMPLIFICADOS: Sin Inventario)
+# =========================================================
 
 def main_keyboard():
+    """Menú principal: Solo Dado y Tienda"""
     keyboard = [
         [InlineKeyboardButton("🎲 Tirar dado", callback_data="roll")],
-        [
-            InlineKeyboardButton("🛒 Tienda", callback_data="shop"),
-            InlineKeyboardButton("🎒 Inventario", callback_data="inventory")
-        ]
+        [InlineKeyboardButton("🛒 Abrir Tienda", callback_data="shop")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def shop_keyboard(game, player):
+    """Teclado de la tienda: Los ítems se activan al pulsar"""
     keyboard = []
+    
+    # Solo mostramos ítems que están en stock (no en cooldown)
     for item_id, item in game.shop.items():
-        if player["coins"] < item["precio"]:
-            continue
+        # Indicador de si puede pagarlo
+        can_buy = "✅" if player["coins"] >= item["precio"] else "❌"
+        
         keyboard.append([
             InlineKeyboardButton(
-                f"{item['emoji']} {item['name']} -{item['precio']}🪙",
+                f"{item['emoji']} {item['name']} ({item['precio']}🪙) {can_buy}",
                 callback_data=f"buy_{item_id}"
             )
         ])
-    keyboard.append([InlineKeyboardButton("⬅️ Volver", callback_data="back")])
-    return InlineKeyboardMarkup(keyboard)
-
-def inventory_keyboard(player):
-    keyboard = []
-    for item_id in player["items"]:
-        item = ITEMS[item_id]
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{item['emoji']} {item['name']}",
-                callback_data=f"use_{item_id}"
-            )
-        ])
-    keyboard.append([InlineKeyboardButton("⬅️ Volver", callback_data="back")])
+        
+    keyboard.append([InlineKeyboardButton("⬅️ Volver a la Pista", callback_data="back")])
     return InlineKeyboardMarkup(keyboard)
