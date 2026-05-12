@@ -1,4 +1,4 @@
-if name == "main":
+if __name__ == "__main__":
 
     app = ApplicationBuilder().token(TOKEN).build()
 
