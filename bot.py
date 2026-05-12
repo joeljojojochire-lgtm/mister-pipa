@@ -23,7 +23,7 @@ games = {}
 rooms = {}
 
 # =========================================================
-# SISTEMA DE REACCIONES (Físicas de Telegram)
+# SISTEMA DE REACCIONES (Corregido para v20+)
 # =========================================================
 async def set_reaction(context, chat_id, message_id, reaction_type):
     """Añade una reacción visual al mensaje del tablero"""
@@ -38,6 +38,7 @@ async def set_reaction(context, chat_id, message_id, reaction_type):
     }
     emoji = reactions.get(reaction_type, "👍")
     try:
+        # Se accede a través de context.bot
         await context.bot.set_message_reaction(
             chat_id=chat_id, 
             message_id=message_id, 
@@ -102,18 +103,27 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- TIRAR DADO ---
         if data == "roll":
             dice = random.randint(1, 6)
-            # Aplicar BOOST si el jugador lo tiene activado
             if player.get("boost"):
                 dice *= 2
-                player["boost"] = False # Se gasta
+                player["boost"] = False 
             
-            player["pos"] += dice
-            player["pos"] = safe_pos(player["pos"], game.max_pos)
+            player["pos"] = safe_pos(player["pos"] + dice, game.max_pos)
             
+            # Narrativas del Dado
             if dice >= 5:
-                txt, mood, react = f"🚀 ¡QUÉ VELOCIDAD! {player['name']} voló {dice} casillas.", "boost", "fire"
+                frases = [
+                    f"🚀 ¡QUÉ VELOCIDAD! {player['name']} puso un cohete.",
+                    f"🔥 {player['name']} corre como si el suelo quemara.",
+                    f"⚡ ¡IMPRESIONANTE! {player['name']} vuela por la pista."
+                ]
+                txt, mood, react = random.choice(frases), "boost", "fire"
             elif dice <= 2:
-                txt, mood, react = f"🐢 {player['name']} va muy lento... solo {dice} casillas.", "joke", "bad"
+                frases = [
+                    f"🐢 {player['name']} va tan lento que parece una estatua.",
+                    f"😴 Mister Pipa bosteza... {player['name']} apenas se movió.",
+                    f"🐌 ¿Eso es todo, {player['name']}? ¡Muévete!"
+                ]
+                txt, mood, react = random.choice(frases), "joke", "bad"
             else:
                 txt, mood, react = f"😄 {player['name']} avanza {dice} casillas.", "roll", "roll"
 
@@ -138,12 +148,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # --- TIENDA ---
         elif data == "shop":
             await query.edit_message_text(
-                text=render_game(game, "Mister Pipa abre su maletín... ¿Qué quieres comprar? 💰", "vote"),
+                text=render_game(game, "Mister Pipa abre su maletín de ofertas... 💰", "vote"),
                 reply_markup=shop_keyboard(game, player),
                 parse_mode=ParseMode.HTML
             )
 
-        # --- COMPRA Y ACTIVACIÓN AUTOMÁTICA ---
+        # --- COMPRA Y ACTIVACIÓN ---
         elif data.startswith("buy_"):
             item_id = int(data.split("_")[1])
             item = ITEMS[item_id]
@@ -157,22 +167,25 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 if item["tipo"] == "move": # Pony
                     player["pos"] = safe_pos(player["pos"] + item["valor"], game.max_pos)
-                    txt = f"🐴 ¡{player['name']} compró un Pony y galopó {item['valor']}m!"
+                    txt = f"🐴 ¡Arre! {player['name']} compró un Pony y galopó {item['valor']}m."
                 
                 elif item["tipo"] == "boost": # Turbo
                     player["boost"] = True
-                    txt = f"🔥 ¡Turbo activado! @{player['name']} duplicará su próximo dado."
+                    txt = f"🔥 ¡Turbo activado! {player['name']} duplicará su próximo dado."
                     react = "fire"
 
-                elif item["tipo"] == "trap": # Banana (Al líder)
-                    leader_id = max((pid for pid in game.players if pid != user_id), key=lambda pid: game.players[pid]["pos"])
+                elif item["tipo"] == "trap": # Banana
+                    # Buscar al líder que no sea el comprador
+                    opponents = [pid for pid in game.players if pid != user_id]
+                    leader_id = max(opponents, key=lambda pid: game.players[pid]["pos"])
                     leader = game.players[leader_id]
                     leader["pos"] = safe_pos(leader["pos"] + item["valor"], game.max_pos)
                     txt = f"🍌 ¡ZAS! {player['name']} lanzó una Banana a {leader['name']}."
                     mood, react = "sabotage", "bad"
 
-                elif item["tipo"] == "skip": # Dron (Al líder)
-                    leader_id = max((pid for pid in game.players if pid != user_id), key=lambda pid: game.players[pid]["pos"])
+                elif item["tipo"] == "skip": # Dron
+                    opponents = [pid for pid in game.players if pid != user_id]
+                    leader_id = max(opponents, key=lambda pid: game.players[pid]["pos"])
                     game.players[leader_id]["skip"] += 1
                     txt = f"🚁 ¡Dron en camino! {game.players[leader_id]['name']} pierde su turno."
                     mood, react = "sabotage", "wait"
