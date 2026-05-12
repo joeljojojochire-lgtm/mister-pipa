@@ -2,7 +2,7 @@ import os
 import random
 import asyncio
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -22,6 +22,14 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 games = {}
 rooms = {}
 
+# --- Configuración de la Votación ---
+VOTACIONES = {
+    "liebre": {
+        "pregunta": "🚨 ¡UNA LIEBRE SALVAJE ATACA! 🚨\n\nEl grupo está acorralado. Mister Pipa exige un sacrificio... ¿Quién será el 'héroe' que se arroje a la liebre para que los demás escapen?",
+        "mood": "vote"
+    }
+}
+
 # =========================================================
 # SISTEMA DE REACCIONES (Corregido para v20+)
 # =========================================================
@@ -34,11 +42,11 @@ async def set_reaction(context, chat_id, message_id, reaction_type):
         "fire": "🔥",
         "bad": "😱",
         "wait": "⏳",
-        "shock": "☢️"
+        "shock": "☢️",
+        "vote": "🗳️"
     }
     emoji = reactions.get(reaction_type, "👍")
     try:
-        # Se accede a través de context.bot
         await context.bot.set_message_reaction(
             chat_id=chat_id, 
             message_id=message_id, 
@@ -80,7 +88,7 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     game.message_id = msg.message_id
 
 # =========================================================
-# LÓGICA DE BOTONES (DADOS Y COMPRA DIRECTA)
+# LÓGICA DE BOTONES (DADOS, COMPRA Y VOTACIÓN)
 # =========================================================
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -91,17 +99,75 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat_id not in games: return
     game = games[chat_id]
+    
+    # --- SISTEMA DE VOTOS (Acción Pública) ---
+    if data.startswith("vote_"):
+        if not game.pending_vote:
+            return await query.answer("La votación ya terminó.")
+        
+        # Registrar voto si el usuario no ha votado aún
+        if user_id not in game.pending_vote["votos"]:
+            target_id = int(data.split("_")[1])
+            game.pending_vote["votos"][user_id] = target_id
+            
+            # Si todos votaron o se alcanza el quórum
+            if len(game.pending_vote["votos"]) >= len(game.players):
+                votos_lista = list(game.pending_vote["votos"].values())
+                victima_id = max(set(votos_lista), key=votos_lista.count)
+                victima = game.players[victima_id]
+                
+                # Efecto: La víctima retrocede mucho, los demás avanzan un poco
+                victima["pos"] = safe_pos(victima["pos"] - 15, game.max_pos)
+                for pid, p in game.players.items():
+                    if pid != victima_id:
+                        p["pos"] = safe_pos(p["pos"] + 5, game.max_pos)
+                
+                txt = f"🗳 **¡VOTACIÓN CERRADA!**\n\n{victima['name']} ha sido sacrificado a la Liebre Salvaje. Retrocede 15m mientras los demás escapan aprovechando el caos."
+                game.pending_vote = None
+                game.processing = False # Desbloquear juego
+                
+                await query.edit_message_text(
+                    text=render_game(game, txt, "joke"),
+                    reply_markup=main_keyboard(),
+                    parse_mode=ParseMode.HTML
+                )
+                await set_reaction(context, chat_id, game.message_id, "bad")
+            else:
+                await query.answer(f"Voto registrado por {query.from_user.first_name}")
+        else:
+            await query.answer("Ya has votado.", show_alert=True)
+        return
+
+    # Bloqueo de procesamiento para evitar doble clic en dados/tienda
     if game.processing: return
     game.processing = True
 
     try:
         if game.current_player_id() != user_id:
+            game.processing = False
             return await query.answer("❌ No es tu turno.", show_alert=True)
 
         player = game.current_player()
 
         # --- TIRAR DADO ---
         if data == "roll":
+            # PROBABILIDAD DE VOTACIÓN ALEATORIA (15% de probabilidad)
+            if random.random() < 0.15 and len(game.players) > 1:
+                game.pending_vote = {"votos": {}}
+                
+                botones_voto = []
+                for pid, p in game.players.items():
+                    botones_voto.append([InlineKeyboardButton(f"🍴 Sacrificar a {p['name']}", callback_data=f"vote_{pid}")])
+                
+                await query.edit_message_text(
+                    text=render_game(game, VOTACIONES["liebre"]["pregunta"], "vote"),
+                    reply_markup=InlineKeyboardMarkup(botones_voto),
+                    parse_mode=ParseMode.HTML
+                )
+                await set_reaction(context, chat_id, game.message_id, "vote")
+                # No liberamos 'processing' hasta que termine la votación para pausar el juego
+                return
+
             dice = random.randint(1, 6)
             if player.get("boost"):
                 dice *= 2
@@ -109,7 +175,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             player["pos"] = safe_pos(player["pos"] + dice, game.max_pos)
             
-            # Narrativas del Dado
             if dice >= 5:
                 frases = [
                     f"🚀 ¡QUÉ VELOCIDAD! {player['name']} puso un cohete.",
@@ -175,7 +240,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     react = "fire"
 
                 elif item["tipo"] == "trap": # Banana
-                    # Buscar al líder que no sea el comprador
                     opponents = [pid for pid in game.players if pid != user_id]
                     leader_id = max(opponents, key=lambda pid: game.players[pid]["pos"])
                     leader = game.players[leader_id]
@@ -211,7 +275,9 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     finally:
-        game.processing = False
+        # Solo liberamos el procesamiento si no hay una votación pausando el juego
+        if not game.pending_vote:
+            game.processing = False
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
