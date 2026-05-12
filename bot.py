@@ -12,8 +12,8 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 from game import MisterPipaGame
-from ui import render_game, main_keyboard, shop_keyboard, inventory_keyboard
-from items import ITEMS
+from ui import render_game, main_keyboard, shop_keyboard
+from items import ITEMS, SHOP_RESPAWN
 from utils import safe_pos
 from config import MAX_PLAYERS, PLAYER_EMOJIS, PIPA_EMOJIS
 
@@ -27,18 +27,17 @@ rooms = {}
 # =========================================================
 async def set_reaction(context, chat_id, message_id, reaction_type):
     """Añade una reacción visual al mensaje del tablero"""
-    # Mapeo de tipos de eventos a emojis de reacción de Telegram
     reactions = {
         "roll": "🎲",
         "win": "🎉",
         "buy": "💰",
-        "item": "🔥",
+        "fire": "🔥",
         "bad": "😱",
-        "wait": "⏳"
+        "wait": "⏳",
+        "shock": "☢️"
     }
     emoji = reactions.get(reaction_type, "👍")
     try:
-        # Esto pone el emoji directamente sobre el mensaje del bot
         await context.bot.set_message_reaction(
             chat_id=chat_id, 
             message_id=message_id, 
@@ -54,22 +53,13 @@ async def set_reaction(context, chat_id, message_id, reaction_type):
 async def unirse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
-    
-    if chat_id not in rooms:
-        rooms[chat_id] = []
-    
+    if chat_id not in rooms: rooms[chat_id] = []
     if any(p["id"] == user.id for p in rooms[chat_id]):
         return await update.message.reply_text("⚠️ Ya estás en la pista.")
 
-    # Asignar emoji único al azar
     user_emoji = random.choice(PLAYER_EMOJIS)
-    rooms[chat_id].append({
-        "id": user.id,
-        "name": user.first_name,
-        "emoji": user_emoji
-    })
-    
-    await update.message.reply_text(f"✅ **{user.first_name}** se unió con el emoji {user_emoji}")
+    rooms[chat_id].append({"id": user.id, "name": user.first_name, "emoji": user_emoji})
+    await update.message.reply_text(f"✅ **{user.first_name}** se unió con {user_emoji}")
 
 async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -80,7 +70,6 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     games[chat_id] = game
     del rooms[chat_id]
 
-    # Iniciamos con un mensaje de texto plano (Consola)
     msg = await context.bot.send_message(
         chat_id=chat_id,
         text=render_game(game, "¡Mister Pipa da el pistoletazo de salida! 🚩", "default"),
@@ -90,7 +79,7 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     game.message_id = msg.message_id
 
 # =========================================================
-# LÓGICA DE JUEGO (DADOS Y EVENTOS)
+# LÓGICA DE BOTONES (DADOS Y COMPRA DIRECTA)
 # =========================================================
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -101,7 +90,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat_id not in games: return
     game = games[chat_id]
-
     if game.processing: return
     game.processing = True
 
@@ -111,26 +99,24 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         player = game.current_player()
 
+        # --- TIRAR DADO ---
         if data == "roll":
             dice = random.randint(1, 6)
+            # Aplicar BOOST si el jugador lo tiene activado
+            if player.get("boost"):
+                dice *= 2
+                player["boost"] = False # Se gasta
+            
             player["pos"] += dice
             player["pos"] = safe_pos(player["pos"], game.max_pos)
             
-            # Narrativa dinámica según el resultado
             if dice >= 5:
-                txt = f"🚀 ¡QUÉ VELOCIDAD! {player['name']} voló {dice} casillas."
-                mood = "boost"
-                reaction = "fire"
+                txt, mood, react = f"🚀 ¡QUÉ VELOCIDAD! {player['name']} voló {dice} casillas.", "boost", "fire"
             elif dice <= 2:
-                txt = f"🐢 {player['name']} va a paso de tortuga... solo {dice} casillas."
-                mood = "joke"
-                reaction = "bad"
+                txt, mood, react = f"🐢 {player['name']} va muy lento... solo {dice} casillas.", "joke", "bad"
             else:
-                txt = f"😄 {player['name']} avanza con paso firme {dice} casillas."
-                mood = "roll"
-                reaction = "roll"
+                txt, mood, react = f"😄 {player['name']} avanza {dice} casillas.", "roll", "roll"
 
-            # Actualizar tablero
             if player["pos"] >= game.max_pos:
                 await query.edit_message_text(
                     text=render_game(game, f"🏆 ¡{player['name']} GANA EL SHOW! 🏆", "result"),
@@ -142,20 +128,67 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             game.give_money(player)
             game.next_turn()
-            
             await query.edit_message_text(
                 text=render_game(game, txt, mood),
                 reply_markup=main_keyboard(),
                 parse_mode=ParseMode.HTML
             )
-            await set_reaction(context, chat_id, game.message_id, reaction)
+            await set_reaction(context, chat_id, game.message_id, react)
 
+        # --- TIENDA ---
         elif data == "shop":
             await query.edit_message_text(
-                text=render_game(game, "Mister Pipa abre su maletín de ofertas... 💰", "default"),
+                text=render_game(game, "Mister Pipa abre su maletín... ¿Qué quieres comprar? 💰", "vote"),
                 reply_markup=shop_keyboard(game, player),
                 parse_mode=ParseMode.HTML
             )
+
+        # --- COMPRA Y ACTIVACIÓN AUTOMÁTICA ---
+        elif data.startswith("buy_"):
+            item_id = int(data.split("_")[1])
+            item = ITEMS[item_id]
+            
+            if player["coins"] >= item["precio"]:
+                player["coins"] -= item["precio"]
+                del game.shop[item_id]
+                game.shop_cooldowns[item_id] = SHOP_RESPAWN[item_id]
+                
+                txt, mood, react = "", "boost", "buy"
+
+                if item["tipo"] == "move": # Pony
+                    player["pos"] = safe_pos(player["pos"] + item["valor"], game.max_pos)
+                    txt = f"🐴 ¡{player['name']} compró un Pony y galopó {item['valor']}m!"
+                
+                elif item["tipo"] == "boost": # Turbo
+                    player["boost"] = True
+                    txt = f"🔥 ¡Turbo activado! @{player['name']} duplicará su próximo dado."
+                    react = "fire"
+
+                elif item["tipo"] == "trap": # Banana (Al líder)
+                    leader_id = max((pid for pid in game.players if pid != user_id), key=lambda pid: game.players[pid]["pos"])
+                    leader = game.players[leader_id]
+                    leader["pos"] = safe_pos(leader["pos"] + item["valor"], game.max_pos)
+                    txt = f"🍌 ¡ZAS! {player['name']} lanzó una Banana a {leader['name']}."
+                    mood, react = "sabotage", "bad"
+
+                elif item["tipo"] == "skip": # Dron (Al líder)
+                    leader_id = max((pid for pid in game.players if pid != user_id), key=lambda pid: game.players[pid]["pos"])
+                    game.players[leader_id]["skip"] += 1
+                    txt = f"🚁 ¡Dron en camino! {game.players[leader_id]['name']} pierde su turno."
+                    mood, react = "sabotage", "wait"
+
+                elif item["tipo"] == "random": # Bebida
+                    efecto = random.randint(-10, 15)
+                    player["pos"] = safe_pos(player["pos"] + efecto, game.max_pos)
+                    txt = f"☢️ {player['name']} bebió algo raro... ¡Se movió {efecto}m!"
+                    mood, react = "joke", "shock"
+
+                await query.edit_message_text(
+                    text=render_game(game, txt, mood),
+                    reply_markup=main_keyboard(),
+                    parse_mode=ParseMode.HTML
+                )
+                await set_reaction(context, chat_id, game.message_id, react)
 
         elif data == "back":
             await query.edit_message_text(
