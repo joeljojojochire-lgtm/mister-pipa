@@ -251,16 +251,38 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         elif data.startswith("buy_"):
-            item_id = int(data.split("_")[1])
-            item = ITEMS[item_id]
-            if player["coins"] >= item["precio"]:
-                player["coins"] -= item["precio"]
-                del game.shop[item_id]
-                game.shop_cooldowns[item_id] = SHOP_RESPAWN[item_id]
+        item_id = data.split("_")[1]
+        item = ITEMS.get(item_id)
+        player = game.players[query.from_user.id]
+
+        if player["coins"] >= item["costo"]:
+            player["coins"] -= item["costo"]
+            
+            # --- Lógica reparada respetando tus mecánicas ---
+            efecto_msg = ""
+            if item["tipo"] == "movimiento":
+                # Para el Pony o similares
+                player["pos"] = min(player["pos"] + item["valor"], game.max_pos)
+                efecto_msg = f"\n\n✨ ¡Avanzaste a la casilla {player['pos']}!"
+            
+            elif item["tipo"] == "dado_extra":
+                # Para el Dron o Turbo
+                player["modifier"] = item["valor"]
+                efecto_msg = f"\n\n🚀 +{item['valor']} de bono para tu próximo turno."
                 
-                # Lógica de items... (acortada para brevedad, mantén la tuya)
-                txt = f"🛒 {player['name']} compró {item['name']}."
-                
+            elif item["tipo"] == "proteccion":
+                # Para el Caparazón
+                player["protected"] = True
+                efecto_msg = f"\n\n🛡️ ¡Estás protegido contra el próximo evento negativo!"
+
+            await query.answer(f"¡Compraste {item['nombre']}!")
+            await query.edit_message_text(
+                f"🛒 *Tienda*: Has adquirido **{item['nombre']}**.{efecto_msg}\n\n{game.get_status()}",
+                reply_markup=get_game_keyboard(game, query.from_user.id),
+                parse_mode="Markdown"
+            )
+        else:
+            await query.answer("No tienes suficientes monedas 💰", show_alert=True)
                 # (Aquí iría el resto de tu lógica de items: Pony, Dron, etc.)
                 # ...
                 
