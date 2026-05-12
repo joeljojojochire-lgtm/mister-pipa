@@ -2,7 +2,6 @@ import random
 
 from items import ITEMS
 from items import SHOP_RESPAWN
-
 from config import MAP_SIZES
 
 
@@ -114,4 +113,6 @@ class MisterPipaGame:
 
                 player["coins"] = 0
 
-            return f"
+            return f"💸 Impuesto nuclear. -{tax} monedas"
+
+        return ""
