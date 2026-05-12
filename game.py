@@ -2,6 +2,7 @@ import random
 
 from items import ITEMS
 from items import SHOP_RESPAWN
+
 from config import MAP_SIZES
 
 
@@ -50,13 +51,11 @@ class MisterPipaGame:
     # =====================================================
 
     def current_player_id(self):
-
         return self.order[self.current_idx]
 
     # =====================================================
 
     def current_player(self):
-
         return self.players[self.current_player_id()]
 
     # =====================================================
@@ -70,7 +69,6 @@ class MisterPipaGame:
         if self.current_idx >= len(self.order):
 
             self.current_idx = 0
-
             self.rounds += 1
 
             self.refresh_shop()
@@ -83,12 +81,11 @@ class MisterPipaGame:
 
         restore = []
 
-        for item_id in list(self.shop_cooldowns.keys()):
+        for item_id in self.shop_cooldowns:
 
             self.shop_cooldowns[item_id] -= 1
 
             if self.shop_cooldowns[item_id] <= 0:
-
                 restore.append(item_id)
 
         for item_id in restore:
@@ -110,7 +107,6 @@ class MisterPipaGame:
             player["coins"] -= tax
 
             if player["coins"] < 0:
-
                 player["coins"] = 0
 
             return f"💸 Impuesto nuclear. -{tax} monedas"
