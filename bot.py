@@ -74,7 +74,13 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in rooms or len(rooms[chat_id]) < 1:
         return await update.message.reply_text("❌ No hay corredores.")
-
+# --- Relleno de NPCs ---
+    jugadores = rooms[chat_id]
+    if len(jugadores) == 1:
+        jugadores.append({"id": 101, "name": "Primo de Mister Pipa", "emoji": "🤡", "is_npc": True})
+    
+    if len(jugadores) % 2 == 0:
+        jugadores.append({"id": 102, "name": "Mister Pipa Senior", "emoji": "👴", "is_npc": True})
     game = MisterPipaGame(chat_id, rooms[chat_id])
     games[chat_id] = game
     del rooms[chat_id]
@@ -285,3 +291,33 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("jugar", jugar))
     app.add_handler(CallbackQueryHandler(buttons))
     app.run_polling()
+async def check_npc_turn(context, game):
+    """Maneja el turno automático de los parientes de Mister Pipa"""
+    player = game.current_player()
+    if not player.get("is_npc"): return
+
+    await asyncio.sleep(2) # Pausa dramática para 'pensar'
+    dice = random.randint(1, 6)
+    player["pos"] = safe_pos(player["pos"] + dice, game.max_pos)
+    
+    txt = f"🤖 **{player['name']}** (NPC) lanzó el dado: ¡sacó un {dice}!"
+    
+    if player["pos"] >= game.max_pos:
+        await context.bot.edit_message_text(
+            chat_id=game.chat_id, message_id=game.message_id,
+            text=render_game(game, f"🏆 ¡EL NPC {player['name']} HA GANADO! 🏆", "result"),
+            parse_mode=ParseMode.HTML
+        )
+        if game.chat_id in games: del games[game.chat_id]
+        return
+
+    game.give_money(player)
+    game.next_turn()
+    await context.bot.edit_message_text(
+        chat_id=game.chat_id, message_id=game.message_id,
+        text=render_game(game, txt, "roll"),
+        reply_markup=main_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
+    # Si el que sigue también es NPC, vuelve a ejecutarse solo
+    await check_npc_turn(context, game)
