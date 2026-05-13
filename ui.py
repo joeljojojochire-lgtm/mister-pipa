@@ -64,5 +64,13 @@ def main_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def vote_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ SÍ", callback_data="vote_yes"),
+            InlineKeyboardButton("❌ NO", callback_data="vote_no")
+        ]
+    ])
+
 # Nota: shop_keyboard ha sido eliminada para evitar que el jugador 
 # acceda a la gestión compleja, favoreciendo los eventos automáticos.
