@@ -22,8 +22,8 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 games = {}
 rooms = {}
 
-# =========================================================
-# REACCIONES
+ # =========================================================
+# REACCIONES (Versión Corregida)
 # =========================================================
 
 async def set_reaction(context, chat_id, message_id, reaction_type):
@@ -38,14 +38,17 @@ async def set_reaction(context, chat_id, message_id, reaction_type):
 
     try:
         emoji = reactions.get(reaction_type, "✨")
+        # CORRECCIÓN: Usamos ReactionTypeEmoji para evitar el error de 'custom_emoji_id'
+        from telegram import ReactionTypeEmoji
+        
         await context.bot.set_message_reaction(
-            chat_id,
-            message_id,
-            [emoji]
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[ReactionTypeEmoji(emoji)]
         )
     except Exception as e:
-        print("REACTION ERROR:", e)
-
+        # Esto evitará que los errores de reacción detengan el juego
+        print(f"REACTION LOG: {e}")
 # =========================================================
 # EVENTOS
 # =========================================================
