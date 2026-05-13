@@ -3,51 +3,61 @@ from items import ITEMS
 from config import MARQUEE_TEXT, PIPA_EMOJIS
 
 def render_game(game, event_text="", pipa_mood="default"):
-    """
-    Renderiza la interfaz visual 2.0 del juego (Solo Texto).
-    """
-    # 1. Banner Animado (Marquee)
+    # 1. Banner Animado
     shift = game.rounds % 4
     marquee = (" " * shift) + MARQUEE_TEXT
     
-    # 2. El Tablero Visual (Pista de Carreras)
-    track_width = 15 
+    # --- LÓGICA DE CÁMARA MÓVIL ---
+    view_range = 14  # Cuántas casillas se ven en pantalla
+    center = view_range // 2
     board = "<code>"
-    board += "╔═══════════════════════════╗\n"
+    board += "╔══════════════════════════════╗\n"
+    
+    # Definimos el escenario fijo (puedes mover esto a config.py luego)
+    escenario = {5: "🌵", 12: "🌵", 18: "🐦", 25: "⛰️", 35: "🌵", 45: "🐦"}
     
     for pid in game.order:
         p = game.players[pid]
         emoji = p.get("emoji", "🏃")
+        pos = p['pos']
         
-        # Posición visual calculada
-        pos_visual = int((p['pos'] / game.max_pos) * track_width)
-        pos_visual = max(0, min(track_width, pos_visual))
+        # El carril se construye relativo a la posición del jugador
+        lane_list = ["."] * view_range
         
-        # Formatear nombre
+        # Calculamos qué parte del mundo cae dentro de nuestra ventana
+        # La ventana empieza en (pos - centro) y termina en (pos + centro)
+        inicio_v = pos - center
+        
+        # Dibujar obstáculos y meta que entren en la ventana
+        for i in range(view_range):
+            mundo_pos = inicio_v + i
+            
+            # Dibujar Meta
+            if mundo_pos == game.max_pos:
+                lane_list[i] = "🥅"
+            # Dibujar Escenario
+            elif mundo_pos in escenario:
+                lane_list[i] = escenario[mundo_pos]
+        
+        # El jugador SIEMPRE está en el centro (o cerca si está al puro inicio)
+        player_idx = center if pos >= center else pos
+        if player_idx < view_range:
+            lane_list[player_idx] = emoji
+            
+        lane = "".join(lane_list)
         name_display = (p['name'][:6] + "..") if len(p['name']) > 8 else p['name'].ljust(8)
+        board += f"║ {name_display}: {lane} ║\n"
         
-        # Dibujar carril (Puntos para el camino, Emojis para los corredores)
-        lane = "." * pos_visual + emoji + "." * (track_width - pos_visual)
-        board += f"║ {name_display}: {lane}🥅 ║\n"
-        
-    board += "╚═══════════════════════════╝</code>"
+    board += "╚══════════════════════════════╝</code>"
 
-    # 3. Narrativa de Mister Pipa
+    # Resto de la función (Mister Pipa dice, etc.) se queda igual
     pipa_icon = PIPA_EMOJIS.get(pipa_mood, "😀")
-    
-    if not event_text:
-        event_text = "¡El Show continúa! Nadie se rinde."
-
     narrative = f"{pipa_icon} **MISTER PIPA DICE:**\n_{event_text}_"
-
-    # 4. Info de Economía y Turno
     current = game.current_player()
-    stats = f"\n\n🪙 **Tus Monedas:** {current['coins']} | 🏁 **Meta:** {game.max_pos}m"
+    stats = f"\n\n🪙 **Monedas:** {current['coins']} | 📍 **Posición:** {current['pos']}/{game.max_pos}m"
     footer = f"\n👉 Turno de: **{current['name']}**"
 
     return f"{marquee}\n\n{board}\n{narrative}{stats}{footer}"
-
-
 # =========================================================
 # TECLADOS (SIMPLIFICADOS: Sin Inventario)
 # =========================================================
