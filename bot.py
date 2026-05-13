@@ -272,9 +272,7 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     query = update.callback_query
-
     await query.answer()
 
     chat_id = query.message.chat_id
@@ -285,14 +283,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     game = games[chat_id]
 
+    # --- LÓGICA DE VOTACIÓN (NUEVA) ---
+    if query.data in ["vote_yes", "vote_no"]:
+        if game.pending_vote:
+            # Registrar el voto
+            game.pending_vote["votes"][user_id] = (query.data == "vote_yes")
+            
+            # Si todos han votado (Humanos + NPCs que ya votaron en su turno)
+            if len(game.pending_vote["votes"]) >= len(game.order):
+                votos_si = sum(1 for v in game.pending_vote["votes"].values() if v)
+                votos_no = sum(1 for v in game.pending_vote["votes"].values() if not v)
+                
+                # DESEMPATE DE MISTER PIPA (1/1 o 2/2)
+                if votos_si == votos_no:
+                    pipa_decide, pipa_msg = game.resolve_vote_pipa()
+                    resultado_final = pipa_decide
+                else:
+                    resultado_final = votos_si > votos_no
+                    pipa_msg = "¡La mayoría ha decidido!"
+
+                # Aplicar consecuencia (Ejemplo: si sale SÍ, el target retrocede)
+                if resultado_final:
+                    target = game.players[game.pending_vote["target"]]
+                    target["pos"] = safe_pos(target["pos"] - 10, game.max_pos)
+
+                game.pending_vote = None
+                res_txt = "✅ SÍ" if resultado_final else "❌ NO"
+                
+                await query.edit_message_text(
+                    f"📊 **Votación finalizada:** {res_txt}\n{pipa_msg}",
+                    parse_mode=ParseMode.HTML
+                )
+                
+                await asyncio.sleep(2)
+                await check_npc_turn(context, game)
+        return
+
+    # --- LÓGICA DEL DADO (EXISTENTE Y PROTEGIDA) ---
     if game.processing:
         return
 
     if game.current_player_id() != user_id:
-        await query.answer(
-            "⚠️ No es tu turno.",
-            show_alert=True
-        )
+        await query.answer("⚠️ No es tu turno.", show_alert=True)
         return
 
     if query.data != "roll":
@@ -302,78 +334,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         player = game.current_player()
-
-        print("PLAYER TURN:", player["name"])
-
         dice = random.randint(1, 6)
-
         total_move = dice + player.get("modifier", 0)
-
         player["modifier"] = 0
+        player["pos"] = safe_pos(player["pos"] + total_move, game.max_pos)
 
-        player["pos"] = safe_pos(
-            player["pos"] + total_move,
-            game.max_pos
-        )
-
-        event_msg = (
-            f"🎲 {player['name']} lanzó el dado "
-            f"y avanzó {total_move}m."
-        )
-
+        event_msg = f"🎲 {player['name']} lanzó el dado y avanzó {total_move}m."
         mood = "roll"
 
+        # Aplicar moneda de Pipa y eventos
         extra_msg, extra_mood = await apply_random_event(game, player)
-
         if extra_msg:
             event_msg += extra_msg
             mood = extra_mood
 
+        # Verificar Ganador
         if player["pos"] >= game.max_pos:
-
-            text = render_game(
-                game,
-                f"🏆 ¡{player['name']} HA GANADO! 🏆",
-                "win"
-            )
-
-            await query.edit_message_text(
-                text,
-                parse_mode=ParseMode.HTML
-            )
-
-            if chat_id in games:
-                del games[chat_id]
-
+            text = render_game(game, f"🏆 ¡{player['name']} HA GANADO! 🏆", "win")
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+            if chat_id in games: del games[chat_id]
             return
 
         game.next_turn()
-
         text = render_game(game, event_msg, mood)
+
+        # Si el evento generó una votación, usamos el teclado de votos
+        markup = vote_keyboard() if game.pending_vote else main_keyboard()
 
         await query.edit_message_text(
             text,
-            reply_markup=main_keyboard(),
+            reply_markup=markup,
             parse_mode=ParseMode.HTML
         )
 
-        await set_reaction(
-            context,
-            chat_id,
-            game.message_id,
-            mood
-        )
+        await set_reaction(context, chat_id, game.message_id, mood)
 
     except Exception as e:
         print("BUTTON ERROR:", e)
-
     finally:
         game.processing = False
 
     await asyncio.sleep(2)
-
     await check_npc_turn(context, game)
-
 # =========================================================
 # MAIN
 # =========================================================
