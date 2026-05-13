@@ -17,7 +17,8 @@ class MisterPipaGame:
                 "boost": False,
                 "modifier": 0,  # <--- CORRECCIÓN TÉCNICA: Vital para que funcionen los ítems sin dar error
                 "used_item_turn": False,
-                "emoji": p.get("emoji", "🏃")
+                "emoji": p.get("emoji", "🏃"),
+"is_npc": str(p["id"]).startswith("npc_")
             }
             for p in players
         }
