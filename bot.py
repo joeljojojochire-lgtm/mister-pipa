@@ -124,7 +124,21 @@ async def apply_random_event(game, player):
 
 async def check_npc_turn(context, game):
     if game.chat_id not in games or game.processing: return
-    if game.pending_vote or game.pending_action: return 
+    
+    # --- GESTIÓN DE EXPIRACIÓN DE OBJETOS (4s) ---
+    if game.pending_action:
+        if time.time() > game.pending_action.get("expire_time", 0):
+            game.pending_action = None
+            game.next_turn()
+            text = render_game(game, "⏰ ¡Tiempo agotado para el ataque! El objeto se ha perdido.", "joke")
+            await context.bot.edit_message_text(
+                chat_id=game.chat_id, message_id=game.message_id,
+                text=text, reply_markup=main_keyboard(), parse_mode=ParseMode.HTML
+            )
+        else:
+            return # Aún hay tiempo para que el humano elija
+
+    if game.pending_vote: return 
 
     if not str(game.current_player_id()).startswith("npc_"): return
 
@@ -278,20 +292,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         extra_msg, mood, extra_markup = await apply_random_event(game, player)
         event_msg += extra_msg
-        
-        # --- SOLUCIÓN AL CONFLICTO 2: Solo pasa el turno si NO hay acción pendiente ---
         if not game.pending_action:
             game.next_turn()
             markup = vote_keyboard() if game.pending_vote else main_keyboard()
         else:
             markup = extra_markup
-        # -----------------------------------------------------------------------------
-        
         await query.edit_message_text(render_game(game, event_msg, mood), reply_markup=markup, parse_mode=ParseMode.HTML)
     finally:
         game.processing = False
-    
-    # Bloqueamos el turno del NPC si el humano está eligiendo víctima
     if not game.pending_action: await check_npc_turn(context, game)
 
 # =========================================================
