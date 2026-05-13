@@ -9,8 +9,8 @@ def render_game(game, event_text="", pipa_mood="default"):
     # 1. DISEÑO DE CABECERA (Tu nuevo diseño de Gato)
     # Usamos <code> para que los espacios se respeten en Telegram
     banner = (
-        "<code>      ──────▄▀▄─────▄▀▄\n"
-        "      ─────▄█░░▀▀▀▀▀░░█▄\n"
+        "<code>      ────▄▀▄─────▄▀▄\n"
+        "      ───▄█░░▀▀▀▀▀░░█▄\n"
         "      ─▄▄──█░░░░░░░░░░░█──▄▄\n"
         "      █▄▄█─█░░▀░░┬░░▀░░█─█▄▄█\n"
         "      ☆•.¸★ 🄼🄸🅂🅃🄴🅁 🄿🄸🄿🄰 ★⡀.•☆</code>"
