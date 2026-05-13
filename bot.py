@@ -278,14 +278,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         extra_msg, mood, extra_markup = await apply_random_event(game, player)
         event_msg += extra_msg
+        
+        # --- SOLUCIÓN AL CONFLICTO 2: Solo pasa el turno si NO hay acción pendiente ---
         if not game.pending_action:
             game.next_turn()
             markup = vote_keyboard() if game.pending_vote else main_keyboard()
         else:
             markup = extra_markup
+        # -----------------------------------------------------------------------------
+        
         await query.edit_message_text(render_game(game, event_msg, mood), reply_markup=markup, parse_mode=ParseMode.HTML)
     finally:
         game.processing = False
+    
+    # Bloqueamos el turno del NPC si el humano está eligiendo víctima
     if not game.pending_action: await check_npc_turn(context, game)
 
 # =========================================================
