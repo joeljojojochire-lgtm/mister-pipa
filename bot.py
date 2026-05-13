@@ -18,9 +18,11 @@ from items import ITEMS
 from utils import safe_pos
 from config import MAX_PLAYERS, PLAYER_EMOJIS
 from dialogos import DIALOGOS # Importamos tu nuevo guion
-# --- CORRECCIÓN PUNTUAL: IMPORTACIÓN DE EVENTOS ---
-from events import apply_random_event as apply_special_cells, SPECIAL_CELLS
-# --------------------------------------------------
+
+# =========================================================
+# CORRECCIÓN PUNTUAL DE IMPORTACIÓN
+# =========================================================
+from events import apply_special_cells as apply_random_event, SPECIAL_CELLS
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
@@ -90,12 +92,6 @@ async def check_inactivity(context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def apply_random_event(game, player):
-    # --- CORRECCIÓN PUNTUAL: INTEGRACIÓN DE CASILLAS ESPECIALES ---
-    extra_msg, mood, extra_markup = await apply_special_cells(game, player)
-    if extra_msg:
-        return extra_msg, mood, extra_markup
-    # --------------------------------------------------------------
-
     # 1. Probabilidad de Objeto con ELECCIÓN (25%)
     if random.random() < 0.25:
         item = ITEMS[random.randint(1, 4)]
