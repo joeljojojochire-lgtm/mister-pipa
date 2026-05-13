@@ -56,6 +56,40 @@ async def set_reaction(context, chat_id, message_id, reaction_type):
         pass
 
 # =========================================================
+# MOTOR VISUAL (2 REFRESCOS POR SEGUNDO)
+# =========================================================
+async def game_loop(context, chat_id):
+    """Bucle de renderizado independiente para animaciones fluidas"""
+    while chat_id in games:
+        game = games[chat_id]
+        
+        # Si hay votación, el bucle NO sobreescribe para no borrar el menú de votos
+        if not game.pending_vote:
+            try:
+                # Extraemos el estado actual almacenado en el objeto game
+                txt = getattr(game, 'last_event_text', "El show continúa...")
+                mood = getattr(game, 'last_mood', "default")
+                
+                # Determinamos qué teclado mostrar según el estado de la UI
+                if getattr(game, 'ui_state', 'main') == 'shop':
+                    keyboard = shop_keyboard(game, game.current_player())
+                else:
+                    keyboard = main_keyboard()
+
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=game.message_id,
+                    text=render_game(game, txt, mood),
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass # Ignorar errores de Flood Control si ocurren puntualmente
+
+        # 0.5 segundos = 2 frames por segundo
+        await asyncio.sleep(0.5)
+
+# =========================================================
 # LÓGICA DE NPCs (Cerebro Automático Actualizado)
 # =========================================================
 async def check_npc_turn(context, game):
@@ -71,7 +105,6 @@ async def check_npc_turn(context, game):
     
     # --- IA: DECISIÓN DE COMPRA ALEATORIA ---
     npc_buy_msg = ""
-    # Si tiene dinero suficiente, 20% de probabilidad de comprar
     if player["coins"] >= 35 and random.random() < 0.20:
         available = [i_id for i_id, it in game.shop.items() if it["precio"] <= player["coins"]]
         if available:
@@ -80,13 +113,11 @@ async def check_npc_turn(context, game):
             game.shop_cooldowns[item_id] = SHOP_RESPAWN.get(item_id, 3)
             player["coins"] -= item["precio"]
             
-            # Aplicar efecto según tipo (respetando items.py)
             if item["tipo"] == "move":
                 player["pos"] = safe_pos(player["pos"] + item["valor"], game.max_pos)
             elif item["tipo"] == "boost":
                 player["modifier"] = item["valor"]
             elif item["tipo"] == "trap":
-                # Ataca al azar
                 target_id = random.choice(game.order)
                 game.players[target_id]["pos"] = safe_pos(game.players[target_id]["pos"] - 5, game.max_pos)
             
@@ -100,29 +131,22 @@ async def check_npc_turn(context, game):
     player["modifier"] = 0
     
     player["pos"] = safe_pos(player["pos"] + total_move, game.max_pos)
-    txt = f"{npc_buy_msg}🤖 **{player['name']}** lanzó el dado y sacó un {dice}."
+    
+    # IMPORTANTE: No editamos el mensaje aquí, solo actualizamos los datos para el loop
+    game.last_event_text = f"{npc_buy_msg}🤖 **{player['name']}** lanzó el dado y sacó un {dice}."
+    game.last_mood = "roll"
     
     if player["pos"] >= game.max_pos:
-        await context.bot.edit_message_text(
-            chat_id=game.chat_id, 
-            message_id=game.message_id,
-            text=render_game(game, f"🏆 ¡EL NPC {player['name']} HA GANADO EL SHOW! 🏆", "result"),
-            parse_mode=ParseMode.HTML
-        )
+        game.last_event_text = f"🏆 ¡EL NPC {player['name']} HA GANADO EL SHOW! 🏆"
+        game.last_mood = "result"
         await set_reaction(context, game.chat_id, game.message_id, "win")
+        await asyncio.sleep(2)
         if game.chat_id in games: del games[game.chat_id]
         return
 
     game.give_money(player)
     game.next_turn()
     
-    await context.bot.edit_message_text(
-        chat_id=game.chat_id,
-        message_id=game.message_id,
-        text=render_game(game, txt, "roll"),
-        reply_markup=main_keyboard(),
-        parse_mode=ParseMode.HTML
-    )
     await set_reaction(context, game.chat_id, game.message_id, "roll")
     await check_npc_turn(context, game)
 
@@ -154,16 +178,22 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         jugadores.append({"id": 102, "name": "Mister Pipa Senior", "emoji": "👴", "is_npc": True})
 
     game = MisterPipaGame(chat_id, jugadores)
+    game.last_event_text = "¡Mister Pipa da el pistoletazo de salida! 🚩"
+    game.last_mood = "default"
+    game.ui_state = "main"
     games[chat_id] = game
     del rooms[chat_id]
 
     msg = await context.bot.send_message(
         chat_id=chat_id,
-        text=render_game(game, "¡Mister Pipa da el pistoletazo de salida! 🚩", "default"),
+        text=render_game(game, game.last_event_text, game.last_mood),
         reply_markup=main_keyboard(),
         parse_mode=ParseMode.HTML
     )
     game.message_id = msg.message_id
+    
+    # LANZAMOS EL MOTOR VISUAL
+    asyncio.create_task(game_loop(context, chat_id))
     await check_npc_turn(context, game)
 
 # =========================================================
@@ -179,7 +209,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in games: return
     game = games[chat_id]
     
-    # --- SISTEMA DE VOTOS ---
     if data.startswith("vote_"):
         if not game.pending_vote: return await query.answer("La votación terminó.")
         if user_id not in game.pending_vote["votos"]:
@@ -194,20 +223,15 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 votos_lista = list(game.pending_vote["votos"].values())
                 victima_id = max(set(votos_lista), key=votos_lista.count)
                 victima = game.players[victima_id]
-                
                 victima["pos"] = safe_pos(victima["pos"] - 15, game.max_pos)
                 for pid, p in game.players.items():
                     if pid != victima_id: p["pos"] = safe_pos(p["pos"] + 5, game.max_pos)
                 
-                txt = f"🗳 **¡VOTACIÓN CERRADA!**\n\n{victima['name']} fue sacrificado. Los NPCs también votaron."
+                game.last_event_text = f"🗳 **¡VOTACIÓN CERRADA!**\n\n{victima['name']} fue sacrificado."
+                game.last_mood = "joke"
                 game.pending_vote = None
                 game.processing = False
                 
-                await query.edit_message_text(
-                    text=render_game(game, txt, "joke"),
-                    reply_markup=main_keyboard(),
-                    parse_mode=ParseMode.HTML
-                )
                 await set_reaction(context, chat_id, game.message_id, "bad")
                 await check_npc_turn(context, game)
         return
@@ -226,6 +250,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if random.random() < 0.15 and len(game.players) > 1:
                 game.pending_vote = {"votos": {}}
                 botones = [[InlineKeyboardButton(f"🍴 Sacrificar a {p['name']}", callback_data=f"vote_{pid}")] for pid, p in game.players.items()]
+                # La votación se edita manualmente para detener el loop visual temporalmente
                 await query.edit_message_text(
                     text=render_game(game, VOTACIONES["liebre"]["pregunta"], "vote"),
                     reply_markup=InlineKeyboardMarkup(botones),
@@ -246,35 +271,35 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             player["pos"] = safe_pos(player["pos"] + total_move, game.max_pos)
             msg_dice = f"sacó un {dice}" + (f" (+{bono} extra)" if bono > 0 else "")
             
-            if total_move >= 5: txt, mood, react = f"🚀 ¡QUÉ VELOCIDAD! {player['name']} {msg_dice}.", "boost", "fire"
-            elif total_move <= 2: txt, mood, react = f"🐢 {player['name']} {msg_dice}... va lento.", "joke", "bad"
-            else: txt, mood, react = f"😄 {player['name']} avanza con un {total_move}.", "roll", "roll"
+            if total_move >= 5: 
+                game.last_event_text, game.last_mood, react = f"🚀 ¡QUÉ VELOCIDAD! {player['name']} {msg_dice}.", "boost", "fire"
+            elif total_move <= 2: 
+                game.last_event_text, game.last_mood, react = f"🐢 {player['name']} {msg_dice}... va lento.", "joke", "bad"
+            else: 
+                game.last_event_text, game.last_mood, react = f"😄 {player['name']} avanza con un {total_move}.", "roll", "roll"
 
             if player["pos"] >= game.max_pos:
-                await query.edit_message_text(
-                    text=render_game(game, f"🏆 ¡{player['name']} GANA EL SHOW! 🏆", "result"),
-                    parse_mode=ParseMode.HTML
-                )
+                game.last_event_text = f"🏆 ¡{player['name']} GANA EL SHOW! 🏆"
+                game.last_mood = "result"
                 await set_reaction(context, chat_id, game.message_id, "win")
+                await asyncio.sleep(2)
                 if chat_id in games: del games[chat_id]
                 return
 
             game.give_money(player)
             game.next_turn()
-            await query.edit_message_text(
-                text=render_game(game, txt, mood),
-                reply_markup=main_keyboard(),
-                parse_mode=ParseMode.HTML
-            )
             await set_reaction(context, chat_id, game.message_id, react)
             await check_npc_turn(context, game)
 
         elif data == "shop":
-            await query.edit_message_text(
-                text=render_game(game, "Mister Pipa abre su maletín... 💰", "vote"),
-                reply_markup=shop_keyboard(game, player),
-                parse_mode=ParseMode.HTML
-            )
+            game.ui_state = "shop"
+            game.last_event_text = "Mister Pipa abre su maletín... 💰"
+            game.last_mood = "vote"
+
+        elif data == "back":
+            game.ui_state = "main"
+            game.last_event_text = "De vuelta a la pista."
+            game.last_mood = "default"
 
         elif data.startswith("buy_"):
             item_id = int(data.split("_")[1])
@@ -305,21 +330,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     efecto_msg = " ¡Efecto aleatorio activado!"
 
                 await query.answer(f"¡Compraste {item['name']}!")
-                await query.edit_message_text(
-                    text=render_game(game, f"🛒 {player['name']} usó {item['name']}.{efecto_msg}", "boost"),
-                    reply_markup=main_keyboard(),
-                    parse_mode=ParseMode.HTML
-                )
+                game.last_event_text = f"🛒 {player['name']} usó {item['name']}.{efecto_msg}"
+                game.last_mood = "boost"
+                game.ui_state = "main"
                 await set_reaction(context, chat_id, game.message_id, "buy")
             else:
                 await query.answer("No tienes suficientes monedas 💰", show_alert=True)
-
-        elif data == "back":
-            await query.edit_message_text(
-                text=render_game(game, "De vuelta a la pista.", "default"),
-                reply_markup=main_keyboard(),
-                parse_mode=ParseMode.HTML
-            )
 
     finally:
         if not game.pending_vote and chat_id in games:
