@@ -1,12 +1,16 @@
+import random
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import PIPA_EMOJIS
 
 def render_game(game, event_text="", pipa_mood="default"):
     """
-    Renderiza la interfaz visual: Banner de Gato + Pista Clásica + Narrativa.
-    No se ha eliminado ninguna lógica de juego, solo se simplificó la vista.
+    NUEVA INTERFAZ 2.0: 
+    - Pista limpia con corredores y metas.
+    - Panel de estados (🤩/😣 Nombre Emoji Posición/Meta).
+    - Mantiene al Gato y al Mister Pipa comentador.
     """
-    # 1. DISEÑO DE CABECERA (Banner del Gato corregido para móviles)
+    
+    # 1. CABECERA (El Gato se queda igual, es nuestra marca)
     banner = (
         "<code>"
         "  ──▄▀▄─────▄▀▄──\n"
@@ -16,52 +20,53 @@ def render_game(game, event_text="", pipa_mood="default"):
         "  ☆•.¸★ 🄼🄸🅂🅃🄴🅁 🄿🄸🄿🄰 ★⡀.•☆</code>"
     )
     
-    # 2. EL TABLERO VISUAL (Pista Clásica de puntos)
-    track_width = 15 
-    board = "<code>"
-    board += "╔═══════════════════════════╗\n"
-    
+    # 2. PISTA DE CARRERAS (Diseño horizontal limpio)
+    # Añadimos un pequeño movimiento de "balanceo" al azar para simular que corren
+    track_width = 12
+    race_visual = "<code>"
     for pid in game.order:
         p = game.players[pid]
-        emoji = p.get("emoji", "🏃")
+        # Posición proporcional a la meta
+        pos_relativa = int((p['pos'] / game.max_pos) * track_width)
+        pos_relativa = max(0, min(track_width, pos_relativa))
         
-        # Cálculo de posición visual en la pista de 15 puntos
-        pos_visual = int((p['pos'] / game.max_pos) * track_width)
-        pos_visual = max(0, min(track_width, pos_visual))
+        # Efecto de movimiento: si no está en la meta, baila un poco
+        offset = " " if (random.random() > 0.5 and pos_relativa < track_width) else ""
         
-        # Nombre del jugador (máximo 8 caracteres para no romper la tabla)
-        name_display = (p['name'][:6] + "..") if len(p['name']) > 8 else p['name'].ljust(8)
-        
-        # DIBUJO DEL CARRIL: El emoji avanza sobre los puntos
-        lane = "." * pos_visual + emoji + "." * (track_width - pos_visual)
-        board += f"║ {name_display}: {lane}🥅 ║\n"
-        
-    board += "╚═══════════════════════════╝</code>"
+        carril = " " * pos_relativa + p['emoji'] + offset + " " * (track_width - pos_relativa)
+        race_visual += f"{carril} 🥅\n"
+    race_visual += "</code>"
 
-    # 3. NARRATIVA DE MISTER PIPA
+    # 3. PANEL DE ESTADOS (Lo que dibujaste: 🤩Joel 🙉 8/40)
+    stats_panel = ""
+    for pid in game.order:
+        p = game.players[pid]
+        
+        # Lógica de ánimos automática
+        if game.current_player_id() == pid:
+            mood = "⚡" # Es su turno
+        elif p['pos'] >= game.max_pos * 0.8:
+            mood = "🤩" # Cerca de ganar
+        elif p['pos'] < 5:
+            mood = "😏" # Empezando
+        else:
+            mood = random.choice(["🏃", "💪", "🔥"]) # En movimiento
+            
+        # Formateo: Estado + Nombre + Emoji + Progreso
+        stats_panel += f"{mood} <b>{p['name']}</b> {p['emoji']} | <code>{p['pos']}/{game.max_pos}m</code>\n"
+
+    # 4. NARRATIVA DE MISTER PIPA (Comentador)
     pipa_icon = PIPA_EMOJIS.get(pipa_mood, "😀")
-    # Mostramos el texto del evento (caos, ataques, bromas)
-    narrative = f"{pipa_icon} **MISTER PIPA DICE:**\n_{event_text}_"
+    narrative = f"\n{pipa_icon} <b>MISTER PIPA DICE:</b>\n<i>{event_text}</i>"
 
-    # 4. INFO DE POSICIÓN Y TURNO (Sin Tienda ni Monedas)
-    current = game.current_player()
-    stats = f"\n\n🏁 **Meta:** {game.max_pos}m | 📍 **Posición:** {current['pos']}m"
-    footer = f"\n👉 Turno de: **{current['name']}**"
-
-    return f"{banner}\n\n{board}\n{narrative}{stats}{footer}"
+    return f"{banner}\n\n{race_visual}\n{stats_panel}{narrative}"
 
 # =========================================================
-# TECLADOS (SISTEMA IDEAL: Solo Acción)
+# TECLADOS (Sin cambios para mantener estabilidad)
 # =========================================================
 
 def main_keyboard():
-    """
-    Solo botón de Dado. 
-    Se eliminó el botón de Tienda para cumplir con el 'Sistema Ideal'.
-    """
-    keyboard = [
-        [InlineKeyboardButton("🎲 Tirar dado", callback_data="roll")]
-    ]
+    keyboard = [[InlineKeyboardButton("🎲 Tirar dado", callback_data="roll")]]
     return InlineKeyboardMarkup(keyboard)
 
 def vote_keyboard():
@@ -71,6 +76,3 @@ def vote_keyboard():
             InlineKeyboardButton("❌ NO", callback_data="vote_no")
         ]
     ])
-
-# Nota: shop_keyboard ha sido eliminada para evitar que el jugador 
-# acceda a la gestión compleja, favoreciendo los eventos automáticos.
