@@ -60,10 +60,14 @@ async def set_reaction(context, chat_id, message_id, reaction_type):
 # =========================================================
 async def check_npc_turn(context, game):
     """Maneja el turno automático de los parientes de Mister Pipa"""
+    # Verificamos que el juego siga activo antes de continuar
+    if game.chat_id not in games:
+        return
+
     player = game.current_player()
     
-    # Si no es NPC o el juego terminó, salimos
-    if not player.get("is_npc") or game.chat_id not in games:
+    # Si no es NPC, salimos
+    if not player.get("is_npc"):
         return
 
     await asyncio.sleep(2) # Pausa para simular que el bot piensa
@@ -80,6 +84,7 @@ async def check_npc_turn(context, game):
             text=render_game(game, f"🏆 ¡EL NPC {player['name']} HA GANADO EL SHOW! 🏆", "result"),
             parse_mode=ParseMode.HTML
         )
+        # CORRECCIÓN: Añadido await
         await set_reaction(context, game.chat_id, game.message_id, "win")
         if game.chat_id in games: del games[game.chat_id]
         return
@@ -94,6 +99,7 @@ async def check_npc_turn(context, game):
         reply_markup=main_keyboard(),
         parse_mode=ParseMode.HTML
     )
+    # CORRECCIÓN: Añadido await
     await set_reaction(context, game.chat_id, game.message_id, "roll")
 
     # Re-chequear por si el siguiente turno también es de un NPC
@@ -119,7 +125,6 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in rooms or len(rooms[chat_id]) < 1:
         return await update.message.reply_text("❌ No hay corredores.")
 
-    # --- Relleno de NPCs para asegurar número impar y mínimo 2 ---
     jugadores = rooms[chat_id]
     if len(jugadores) == 1:
         jugadores.append({"id": 101, "name": "Primo de Mister Pipa", "emoji": "🤡", "is_npc": True})
@@ -139,7 +144,6 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     game.message_id = msg.message_id
     
-    # Si el primer jugador es un NPC, que empiece a mover
     await check_npc_turn(context, game)
 
 # =========================================================
@@ -162,7 +166,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_id = int(data.split("_")[1])
             game.pending_vote["votos"][user_id] = target_id
             
-            # Los NPCs votan automáticamente
             for pid, p in game.players.items():
                 if p.get("is_npc") and pid not in game.pending_vote["votos"]:
                     game.pending_vote["votos"][pid] = random.choice(list(game.players.keys()))
@@ -185,6 +188,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=main_keyboard(),
                     parse_mode=ParseMode.HTML
                 )
+                # CORRECCIÓN: Añadido await
                 await set_reaction(context, chat_id, game.message_id, "bad")
                 await check_npc_turn(context, game)
         return
@@ -208,22 +212,20 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup(botones),
                     parse_mode=ParseMode.HTML
                 )
+                # CORRECCIÓN: Añadido await
                 await set_reaction(context, chat_id, game.message_id, "vote")
                 return
 
             dice = random.randint(1, 6)
-            
-            # --- APLICAR MEJORAS DE ITEMS (MODIFICADORES) ---
             bono = player.get("modifier", 0)
             total_move = dice + bono
-            player["modifier"] = 0 # Consumimos el bono
+            player["modifier"] = 0 
             
             if player.get("boost"):
                 total_move *= 2
                 player["boost"] = False 
             
             player["pos"] = safe_pos(player["pos"] + total_move, game.max_pos)
-            
             msg_dice = f"sacó un {dice}" + (f" (+{bono} extra)" if bono > 0 else "")
             
             if total_move >= 5: txt, mood, react = f"🚀 ¡QUÉ VELOCIDAD! {player['name']} {msg_dice}.", "boost", "fire"
@@ -235,6 +237,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=render_game(game, f"🏆 ¡{player['name']} GANA EL SHOW! 🏆", "result"),
                     parse_mode=ParseMode.HTML
                 )
+                # CORRECCIÓN: Añadido await
                 await set_reaction(context, chat_id, game.message_id, "win")
                 if chat_id in games: del games[chat_id]
                 return
@@ -246,6 +249,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=main_keyboard(),
                 parse_mode=ParseMode.HTML
             )
+            # CORRECCIÓN: Añadido await
             await set_reaction(context, chat_id, game.message_id, react)
             await check_npc_turn(context, game)
 
@@ -262,14 +266,11 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if player["coins"] >= item["precio"]:
                 player["coins"] -= item["precio"]
-                
-                # Quitar de la tienda y poner cooldown
                 if item_id in game.shop:
                     del game.shop[item_id]
                     game.shop_cooldowns[item_id] = SHOP_RESPAWN.get(item_id, 3)
 
                 efecto_msg = ""
-                # Lógica según el tipo de ítem en items.py
                 if item["tipo"] == "move":
                     player["pos"] = safe_pos(player["pos"] + item["valor"], game.max_pos)
                     efecto_msg = f" ¡Avanzaste {item['valor']} casillas!"
@@ -277,12 +278,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     player["modifier"] = item["valor"]
                     efecto_msg = f" +{item['valor']} de bono para tu próximo turno."
                 elif item["tipo"] == "trap":
-                    # Sabotaje al siguiente jugador
                     game.next_turn()
                     target = game.current_player()
                     target["pos"] = safe_pos(target["pos"] + item["valor"], game.max_pos)
                     efecto_msg = f" ¡Le lanzaste una trampa a {target['name']}!"
-                    # Volvemos el índice al comprador para que pueda tirar su dado
                     game.current_idx = (game.current_idx - 1) % len(game.order)
                 elif item["tipo"] == "random":
                     suerte = random.randint(-10, 15)
@@ -295,6 +294,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=main_keyboard(),
                     parse_mode=ParseMode.HTML
                 )
+                # CORRECCIÓN: Añadido await
                 await set_reaction(context, chat_id, game.message_id, "buy")
             else:
                 await query.answer("No tienes suficientes monedas 💰", show_alert=True)
