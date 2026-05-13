@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-# CORRECCIÓN QUIRÚRGICA: Imports limpios y sin duplicados
+# CAMBIO QUIRÚRGICO: Se añadió vote_keyboard y se limpiaron duplicados
 from game import MisterPipaGame
 from ui import render_game, main_keyboard, vote_keyboard
 from items import ITEMS
@@ -76,8 +76,7 @@ async def apply_random_event(game, player):
             else:
                 return f"{msg_moneda}\n¿Usar {item['name']}? Pipa se lo pensó mejor. 'Hoy no'.", "joke"
     
-    # 2. CORRECCIÓN: Probabilidad de activar una VOTACIÓN (15%)
-    # Sin esto, la lógica de botones de voto nunca se ejecutaría
+    # 2. ACTIVACIÓN DE VOTACIÓN (15%) - Corrección vital
     if random.random() < 0.15:
         target_id = random.choice(game.order)
         game.pending_vote = {
@@ -85,7 +84,6 @@ async def apply_random_event(game, player):
             "votes": {}
         }
         
-        # Los NPCs votan al instante para no bloquear el flujo
         for pid, pdata in game.players.items():
             if pdata.get("is_npc"):
                 game.pending_vote["votes"][pid] = random.choice([True, False])
@@ -99,13 +97,12 @@ async def check_npc_turn(context, game):
     if game.chat_id not in games or game.processing:
         return
 
-    # CORRECCIÓN: Si hay votación, el NPC vota y SE DETIENE (espera a los humanos)
+    # Si hay votación, el NPC vota y espera (No tira dado todavía)
     if game.pending_vote:
         npc_id = game.current_player_id()
         if str(npc_id).startswith("npc_") and npc_id not in game.pending_vote["votes"]:
             game.pending_vote["votes"][npc_id] = random.choice([True, False])
-            print(f"NPC {game.players[npc_id]['name']} votó en silencio.")
-        return # Importante: No tirar dado si hay votación activa
+        return 
 
     if not str(game.current_player_id()).startswith("npc_"):
         return
@@ -137,7 +134,6 @@ async def check_npc_turn(context, game):
         game.next_turn()
         text = render_game(game, event_msg, mood)
         
-        # Seleccionar teclado dinámico
         markup = vote_keyboard() if game.pending_vote else main_keyboard()
 
         await context.bot.edit_message_text(
@@ -159,7 +155,7 @@ async def check_npc_turn(context, game):
         await check_npc_turn(context, game)
 
 # =========================================================
-# COMANDOS: UNIRSE / JUGAR
+# UNIRSE / JUGAR
 # =========================================================
 
 async def unirse(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -213,7 +209,7 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await check_npc_turn(context, game)
 
 # =========================================================
-# HANDLER DE BOTONES
+# BOTONES
 # =========================================================
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -225,7 +221,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in games: return
     game = games[chat_id]
 
-    # --- LÓGICA DE VOTACIÓN ---
+    # --- VOTACIONES ---
     if query.data in ["vote_yes", "vote_no"]:
         if game.pending_vote:
             game.pending_vote["votes"][user_id] = (query.data == "vote_yes")
@@ -251,7 +247,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await check_npc_turn(context, game)
         return
 
-    # --- LÓGICA DEL DADO ---
+    # --- DADO ---
     if game.processing: return
     if game.current_player_id() != user_id:
         await query.answer("⚠️ No es tu turno.", show_alert=True)
