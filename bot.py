@@ -58,13 +58,11 @@ async def game_loop(context, chat_id):
                 txt = getattr(game, 'last_event_text', "El show continúa...")
                 mood = getattr(game, 'last_mood', "default")
                 
-                # DETERMINAR TECLADO: Si el humano debe "Continuar", mostramos ese botón
                 if not game.current_player().get("is_npc") and getattr(game, 'waiting_continue', False):
                     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Continuar Turno", callback_data="continue")]])
                 elif getattr(game, 'ui_state', 'main') == 'shop':
                     keyboard = shop_keyboard(game, game.current_player())
                 else:
-                    # En modo automático, el teclado principal ya no tiene botón de dado
                     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Abrir Tienda", callback_data="shop")]])
 
                 await context.bot.edit_message_text(
@@ -81,16 +79,17 @@ async def game_loop(context, chat_id):
 # LÓGICA DE FLUJO AUTOMÁTICO (DADO + ITEMS + NPCs)
 # =========================================================
 async def execute_auto_turn(context, game):
-    """Corazón del juego: ejecuta el dado y eventos sin botones"""
     if game.chat_id not in games: return
     
     player = game.current_player()
     game.waiting_continue = False
 
-    # 1. Probabilidad de Evento Vital (Votación)
-    if random.random() < 0.15 and len(game.players) > 1:
+    # 1. Probabilidad de Evento Vital (Votación) - SOLO EN TURNOS DE HUMANOS
+    if not player.get("is_npc") and random.random() < 0.15 and len(game.players) > 1:
         game.pending_vote = {"votos": {}}
         botones = [[InlineKeyboardButton(f"🍴 Sacrificar a {p['name']}", callback_data=f"vote_{pid}")] for pid, p in game.players.items()]
+        
+        # Detenemos el loop visual editando manualmente para mostrar la votación
         await context.bot.edit_message_text(
             chat_id=game.chat_id,
             message_id=game.message_id,
@@ -99,9 +98,9 @@ async def execute_auto_turn(context, game):
             parse_mode=ParseMode.HTML
         )
         await set_reaction(context, game.chat_id, game.message_id, "vote")
-        return # Se detiene hasta que se resuelva la votación en 'buttons'
+        return 
 
-    await asyncio.sleep(1.5) # Pausa dramática para ver quién mueve
+    await asyncio.sleep(1.5) 
 
     # 2. Lanzamiento de Dado Automático
     dice = random.randint(1, 6)
@@ -114,7 +113,7 @@ async def execute_auto_turn(context, game):
     game.last_mood = "roll"
     await set_reaction(context, game.chat_id, game.message_id, "roll")
 
-    # 3. Casillas de Objetos Automáticas (Si cae en múltiplo de 5 o 7)
+    # 3. Casillas de Objetos Automáticas
     if player["pos"] > 0 and (player["pos"] % 5 == 0 or player["pos"] % 7 == 0):
         item = random.choice(list(ITEMS.values()))
         game.last_event_text += f"\n🎁 ¡Casilla especial! Obtiene: {item['name']}"
@@ -134,11 +133,11 @@ async def execute_auto_turn(context, game):
 
     # 5. Siguiente Paso
     if player.get("is_npc"):
-        await asyncio.sleep(2.5) # Tiempo para leer lo que hizo el NPC
+        await asyncio.sleep(2.5) 
         game.next_turn()
         await execute_auto_turn(context, game)
     else:
-        game.waiting_continue = True # Muestra el botón de "Continuar" para el humano
+        game.waiting_continue = True 
 
 # =========================================================
 # COMANDOS Y BOTONES
@@ -178,7 +177,7 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     game.message_id = msg.message_id
     asyncio.create_task(game_loop(context, chat_id))
-    await execute_auto_turn(context, game) # Empezar flujo automático
+    await execute_auto_turn(context, game)
 
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -191,24 +190,28 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Lógica de Votos
     if data.startswith("vote_"):
         if not game.pending_vote: return
+        # Registrar voto del humano
         game.pending_vote["votos"][user_id] = int(data.split("_")[1])
-        # NPCs votan al instante
+        
+        # NPCs votan inmediatamente (Cerebro del Bot)
         for pid, p in game.players.items():
             if p.get("is_npc") and pid not in game.pending_vote["votos"]:
                 game.pending_vote["votos"][pid] = random.choice(game.order)
 
-        if len(game.pending_vote["votos"]) >= len(game.players):
+        # Si todos han votado (incluyendo bots), resolvemos
+        if len(game.pending_vote["votos"]) >= len([p for p in game.players.values() if not p.get("is_npc") or True]):
             votos_lista = list(game.pending_vote["votos"].values())
             victima_id = max(set(votos_lista), key=votos_lista.count)
             game.players[victima_id]["pos"] = safe_pos(game.players[victima_id]["pos"] - 15, game.max_pos)
+            
             game.last_event_text = f"🗳 **¡VOTACIÓN CERRADA!**\n\n{game.players[victima_id]['name']} fue sacrificado."
             game.last_mood = "joke"
             game.pending_vote = None
+            await set_reaction(context, chat_id, game.message_id, "bad")
             await asyncio.sleep(2)
             await execute_auto_turn(context, game)
         return
 
-    # Botón Continuar (Solo para el jugador actual humano)
     if data == "continue":
         if game.current_player_id() == user_id:
             game.next_turn()
@@ -217,14 +220,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("No es tu turno de continuar.")
         return
 
-    # Tienda (Mantenida como pediste)
     if data == "shop":
         game.ui_state = "shop"
         game.last_event_text = "Mister Pipa abre su maletín... 💰"
     elif data == "back":
         game.ui_state = "main"
     elif data.startswith("buy_"):
-        # ... (Lógica de compra igual a la original para no romper nada)
         item_id = int(data.split("_")[1])
         item = ITEMS.get(item_id)
         player = game.current_player()
