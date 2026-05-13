@@ -1,4 +1,5 @@
 import random
+import time # Única importación añadida para que funcione el temporizador
 from items import ITEMS
 from config import MAP_SIZES
 
@@ -33,6 +34,11 @@ class MisterPipaGame:
         self.processing = False
         self.turn_version = 0
         self.message_id = None
+        
+        # --- CORRECCIÓN PUNTO 1: Atributos necesarios para bot.py ---
+        self.last_action_time = time.time() 
+        self.pending_action = None
+        # -----------------------------------------------------------
 
     def current_player_id(self):
         return self.order[self.current_idx]
