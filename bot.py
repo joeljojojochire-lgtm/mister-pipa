@@ -50,21 +50,24 @@ async def set_reaction(context, chat_id, message_id, reaction_type):
 # =========================================================
 # MOTOR VISUAL (2 FPS)
 # =========================================================
+
 async def game_loop(context, chat_id):
     while chat_id in games:
         game = games[chat_id]
-        if not game.pending_vote:
-            try:
-                txt = getattr(game, 'last_event_text', "El show continúa...")
-                mood = getattr(game, 'last_mood', "default")
-                
+        # Eliminamos el "if not game.pending_vote" para que el tablero NO se detenga
+        try:
+            txt = getattr(game, 'last_event_text', "El show continúa...")
+            mood = getattr(game, 'last_mood', "default")
+            
+            # Solo manejamos el teclado si NO hay votación activa
+            if not game.pending_vote:
                 if not game.current_player().get("is_npc") and getattr(game, 'waiting_continue', False):
                     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("➡️ Continuar Turno", callback_data="continue")]])
                 elif getattr(game, 'ui_state', 'main') == 'shop':
                     keyboard = shop_keyboard(game, game.current_player())
                 else:
                     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Abrir Tienda", callback_data="shop")]])
-
+                
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=game.message_id,
@@ -72,9 +75,10 @@ async def game_loop(context, chat_id):
                     reply_markup=keyboard,
                     parse_mode=ParseMode.HTML
                 )
-            except Exception: pass
-        await asyncio.sleep(0.5)
-
+        except Exception: 
+            pass # Si hay error (como el de Conflict), el loop sigue intentando
+            
+        await asyncio.sleep(0.6) # Un poquito más lento para que Render no tire el error de Conflict
 # =========================================================
 # LÓGICA DE FLUJO AUTOMÁTICO (DADO + ITEMS + NPCs)
 # =========================================================
