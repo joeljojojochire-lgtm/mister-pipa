@@ -10,9 +10,9 @@ from telegram.ext import (
     ContextTypes,
 )
 from telegram.constants import ParseMode
-
+from ui import render_game, main_keyboard, vote_keyboard
 from game import MisterPipaGame
-from ui import render_game, main_keyboard
+from ui import render_game, main_keyboard, vote_keyboard
 from items import ITEMS
 from utils import safe_pos
 from config import MAX_PLAYERS, PLAYER_EMOJIS
