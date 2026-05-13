@@ -79,13 +79,24 @@ async def apply_random_event(game, player):
     
     return "", "default"
 async def check_npc_turn(context, game):
-
     if game.chat_id not in games:
         return
 
     if game.processing:
         return
 
+    # 1. SI HAY UNA VOTACIÓN PENDIENTE, EL NPC VOTA PRIMERO
+    if game.pending_vote:
+        # El NPC elige aleatoriamente SI (True) o NO (False)
+        npc_vote = random.choice([True, False])
+        npc_id = game.current_player_id()
+        
+        # Registramos el voto del NPC para que no bloquee el flujo
+        if npc_id not in game.pending_vote["votes"]:
+            game.pending_vote["votes"][npc_id] = npc_vote
+            print(f"NPC {game.players[npc_id]['name']} votó: {npc_vote}")
+
+    # 2. VERIFICAR SI LE TOCA A UN NPC TIRAR EL DADO
     if not str(game.current_player_id()).startswith("npc_"):
         return
 
@@ -93,15 +104,13 @@ async def check_npc_turn(context, game):
 
     try:
         player = game.current_player()
-
         print("NPC TURN:", player["name"])
 
         await asyncio.sleep(1.5)
 
+        # Tirada de dado
         dice = random.randint(1, 6)
-
         total_move = dice + player.get("modifier", 0)
-
         player["modifier"] = 0
 
         player["pos"] = safe_pos(
@@ -116,12 +125,14 @@ async def check_npc_turn(context, game):
 
         mood = "roll"
 
+        # Aplicar evento aleatorio (Aquí es donde Pipa puede lanzar su moneda)
         extra_msg, extra_mood = await apply_random_event(game, player)
 
         if extra_msg:
             event_msg += extra_msg
             mood = extra_mood
 
+        # Verificar si ganó
         if player["pos"] >= game.max_pos:
             text = render_game(
                 game,
@@ -138,9 +149,9 @@ async def check_npc_turn(context, game):
 
             if game.chat_id in games:
                 del games[game.chat_id]
-
             return
 
+        # Siguiente turno
         game.next_turn()
 
         text = render_game(game, event_msg, mood)
@@ -166,14 +177,13 @@ async def check_npc_turn(context, game):
     finally:
         game.processing = False
 
+    # Si el siguiente jugador también es NPC, se vuelve a llamar a sí misma
     await asyncio.sleep(2)
-
     if (
         game.chat_id in games
         and str(game.current_player_id()).startswith("npc_")
     ):
         await check_npc_turn(context, game)
-
 # =========================================================
 # UNIRSE
 # =========================================================
