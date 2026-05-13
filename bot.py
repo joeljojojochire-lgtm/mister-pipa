@@ -128,7 +128,7 @@ async def check_npc_turn(context, game):
         if player["pos"] >= game.max_pos:
             text = render_game(game, f"🏆 ¡{player['name']} HA GANADO! 🏆", "win")
             await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id, text=text, parse_mode=ParseMode.HTML)
-            if game.chat_id in games: del games[game.chat_id]
+            if game.chat_id in games: del games[chat_id]
             return
 
         game.next_turn()
@@ -242,7 +242,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 game.pending_vote = None
                 res_txt = "✅ SÍ" if resultado_final else "❌ NO"
-                await query.edit_message_text(f"📊 **Votación finalizada:** {res_txt}\n{pipa_msg}", parse_mode=ParseMode.HTML)
+                
+                # CORRECCIÓN AQUÍ: Usamos render_game para no perder el tablero
+                texto_con_tablero = render_game(
+                    game, 
+                    f"📊 Votación finalizada: {res_txt}\n{pipa_msg}", 
+                    "result"
+                )
+                
+                await query.edit_message_text(
+                    texto_con_tablero, 
+                    reply_markup=main_keyboard(), # Restauramos el botón de dado
+                    parse_mode=ParseMode.HTML
+                )
+                
                 await asyncio.sleep(2)
                 await check_npc_turn(context, game)
         return
