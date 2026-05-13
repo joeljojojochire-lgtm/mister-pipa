@@ -15,6 +15,7 @@ class MisterPipaGame:
                 "items": [],
                 "skip": 0,
                 "boost": False,
+                "modifier": 0,  # <--- REGLA: No omitir. Esto es vital para los ítems.
                 "used_item_turn": False,
                 "emoji": p.get("emoji", "🏃")
             }
@@ -52,7 +53,7 @@ class MisterPipaGame:
     def refresh_shop(self):
         """Gestiona el tiempo de espera de los objetos en la tienda"""
         restore = []
-        # Convertimos a lista las llaves para poder borrar mientras iteramos
+        # Convertimos a lista las llaves para poder borrar mientras iteramos (Evita RuntimeError)
         for item_id in list(self.shop_cooldowns.keys()):
             self.shop_cooldowns[item_id] -= 1
             if self.shop_cooldowns[item_id] <= 0:
