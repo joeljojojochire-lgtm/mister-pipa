@@ -54,61 +54,30 @@ async def set_reaction(context, chat_id, message_id, reaction_type):
 # =========================================================
 
 async def apply_random_event(game, player):
-    event_msg = ""
-    mood = "roll"
-
-    if random.random() < 0.30:
-        item_id = random.choice(list(ITEMS.keys()))
-        item = ITEMS[item_id]
-
-        if item["tipo"] == "move":
-            player["pos"] = safe_pos(
-                player["pos"] + item["valor"],
-                game.max_pos
-            )
-
-            event_msg = (
-                f"\n🎁 ¡Pipa entrega {item['name']}! "
-                f"+{item['valor']}m"
-            )
-            mood = "boost"
-
-        elif item["tipo"] == "boost":
-            player["modifier"] = item["valor"]
-
-            event_msg = (
-                f"\n⚡ ¡Pipa entrega {item['name']}! "
-                f"+{item['valor']} próximo turno"
-            )
-            mood = "boost"
-
-        elif item["tipo"] == "trap":
-            targets = [
-                pid for pid in game.order
-                if pid != game.current_player_id()
-            ]
-
-            if targets:
-                target_id = random.choice(targets)
+    # Probabilidad de que Mister Pipa use un objeto contra alguien o sobre ti
+    if random.random() < 0.25:
+        item = ITEMS[random.randint(1, 5)]
+        resultado = random.choice(["CARA", "CRUZ"])
+        pasa_algo = (resultado == "CARA")
+        
+        msg_moneda = f"\n🪙 **Mister Pipa lanza una moneda... ¡{resultado}!**"
+        
+        # Si es un objeto de ataque o movimiento
+        if item["tipo"] in ["trap", "move", "boost"]:
+            # Decidir objetivo: 50% tú, 50% alguien aleatorio
+            if random.random() > 0.5:
+                target_id = random.choice(game.order)
                 target = game.players[target_id]
+            else:
+                target = player
 
-                target["pos"] = safe_pos(
-                    target["pos"] + item["valor"],
-                    game.max_pos
-                )
-
-                event_msg = (
-                    f"\n💢 ¡Pipa lanzó {item['name']} "
-                    f"a {target['name']}!"
-                )
-                mood = "sabotage"
-
-    return event_msg, mood
-
-# =========================================================
-# TURNOS NPC
-# =========================================================
-
+            if pasa_algo:
+                target["pos"] = safe_pos(target["pos"] + item.get("valor", 5), game.max_pos)
+                return f"{msg_moneda}\n¿Usar {item['name']} en {target['name']}? ¿Y por qué no? ({item.get('valor')}m)", "sabotage"
+            else:
+                return f"{msg_moneda}\n¿Usar {item['name']}? Pipa se lo pensó mejor. 'Hoy no'.", "joke"
+    
+    return "", "default"
 async def check_npc_turn(context, game):
 
     if game.chat_id not in games:
