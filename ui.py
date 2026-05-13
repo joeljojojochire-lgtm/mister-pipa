@@ -4,10 +4,10 @@ from config import PIPA_EMOJIS
 
 def render_game(game, event_text="", pipa_mood="default"):
     """
-    NUEVA INTERFAZ 2.0: 
-    - Pista limpia con corredores y metas.
-    - Panel de estados (🤩/😣 Nombre Emoji Posición/Meta).
-    - Mantiene al Gato y al Mister Pipa comentador.
+    INTERFAZ MISTER PIPA RACE:
+    - Cabecera del Gato (Marca Registrada).
+    - Pista visual hasta 5 jugadores (Estilo Retro).
+    - Narrativa de Mister Pipa con tus diálogos.
     """
     
     # 1. CABECERA (El Gato se queda igual, es nuestra marca)
@@ -20,54 +20,55 @@ def render_game(game, event_text="", pipa_mood="default"):
         "  ☆•.¸★ 🄼🄸🅂🅃🄴🅁 🄿🄸🄿🄰 ★⡀.•☆</code>"
     )
     
-    # 2. PISTA DE CARRERAS (Diseño horizontal limpio)
-    # Añadimos un pequeño movimiento de "balanceo" al azar para simular que corren
-    track_width = 12
-    race_visual = "<code>"
+    # 2. PISTA DE CARRERAS (Estilo solicitado: 🐵──────🏃────────────🏁)
+    track_len = 15 # Longitud visual de la pista
+    race_visual = "\n"
+    
     for pid in game.order:
         p = game.players[pid]
-        # Posición proporcional a la meta
-        pos_relativa = int((p['pos'] / game.max_pos) * track_width)
-        pos_relativa = max(0, min(track_width, pos_relativa))
+        # Calculamos posición relativa (0 a track_len)
+        pos_rel = int((p['pos'] / game.max_pos) * track_len)
+        pos_rel = max(0, min(track_len, pos_rel))
         
-        # Efecto de movimiento: si no está en la meta, baila un poco
-        offset = " " if (random.random() > 0.5 and pos_relativa < track_width) else ""
+        # Construcción del carril
+        line_before = "─" * pos_rel
+        line_after = "─" * (track_len - pos_rel)
         
-        carril = " " * pos_relativa + p['emoji'] + offset + " " * (track_width - pos_relativa)
-        race_visual += f"{carril} 🥅\n"
-    race_visual += "</code>"
+        # Si ya ganó, el emoji de corredor se vuelve una estrella o trofeo
+        runner = "🏃" if p['pos'] < game.max_pos else "🏆"
+        
+        # Formato: Emoji_Jugador + Carril + Corredor + Carril + Meta
+        race_visual += f"<code>{p['emoji']}{line_before}{runner}{line_after}🏁</code>\n"
 
-    # 3. PANEL DE ESTADOS (Lo que dibujaste: 🤩Joel 🙉 8/40)
-    stats_panel = ""
+    # 3. PANEL DE ESTADOS COMPACTO
+    stats_panel = "\n"
     for pid in game.order:
         p = game.players[pid]
-        
-        # Lógica de ánimos automática
-        if game.current_player_id() == pid:
-            mood = "⚡" # Es su turno
-        elif p['pos'] >= game.max_pos * 0.8:
-            mood = "🤩" # Cerca de ganar
-        elif p['pos'] < 5:
-            mood = "😏" # Empezando
-        else:
-            mood = random.choice(["🏃", "💪", "🔥"]) # En movimiento
-            
-        # Formateo: Estado + Nombre + Emoji + Progreso
-        stats_panel += f"{mood} <b>{p['name']}</b> {p['emoji']} | <code>{p['pos']}/{game.max_pos}m</code>\n"
+        current_mark = "▶️" if game.current_player_id() == pid else "  "
+        stats_panel += f"{current_mark} <b>{p['name']}</b>: <code>{p['pos']}m</code>\n"
 
     # 4. NARRATIVA DE MISTER PIPA (Comentador)
     pipa_icon = PIPA_EMOJIS.get(pipa_mood, "😀")
-    narrative = f"\n{pipa_icon} <b>MISTER PIPA DICE:</b>\n<i>{event_text}</i>"
+    
+    # Marco visual para el comentario
+    narrative = (
+        f"\n╔══ 🏝️ MISTER PIPA RACE ══╗\n"
+        f"{race_visual}"
+        f"{stats_panel}\n"
+        f"{pipa_icon} <b>Pipa:</b> <i>{event_text}</i>\n"
+        f"╚════════════════════════╝"
+    )
 
-    return f"{banner}\n\n{race_visual}\n{stats_panel}{narrative}"
+    return f"{banner}\n{narrative}"
 
 # =========================================================
-# TECLADOS (Sin cambios para mantener estabilidad)
+# TECLADOS
 # =========================================================
 
 def main_keyboard():
-    keyboard = [[InlineKeyboardButton("🎲 Tirar dado", callback_data="roll")]]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎲 Lanzar Dados", callback_data="roll")]
+    ])
 
 def vote_keyboard():
     return InlineKeyboardMarkup([
