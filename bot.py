@@ -65,6 +65,12 @@ async def apply_random_event(game, player):
             "votes": {},
             "expire_time": time.time() + 10 # REGLA: 10 SEGUNDOS
         }
+        
+        # MODIFICACIÓN EXCLUSIVA: Los NPCs votan de inmediato al azar al crearse la votación
+        for pid, p in game.players.items():
+            if p.get("is_npc"):
+                game.pending_vote["votes"][pid] = random.choice([True, False])
+                
         frase = await obtener_comentario("votacion_abierta")
         return f"\n🗳️ {frase}\n¿Retrocedemos a {game.players[target_id]['name']}? (10s)", "vote", vote_keyboard()
 
@@ -89,16 +95,33 @@ async def check_npc_turn(context, game):
             text=render_game(game, f"⏰ Tiempo agotado. Pipa atacó a {target['name']} al azar.", "joke"),
             reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
 
-    # 2. Resolver votaciones expiradas (10s)
-    if game.pending_vote and time.time() > game.pending_vote.get("expire_time", 0):
-        res, pipa_msg = game.resolve_vote_pipa()
-        if res:
-            target = game.players[game.pending_vote["target"]]
-            target["pos"] = safe_pos(target["pos"] - 10, game.max_pos)
-        game.pending_vote = None
-        await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id,
-            text=render_game(game, f"⏰ Votación cerrada. Pipa decidió: {pipa_msg}", "vote"),
-            reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
+    # 2. Resolver votaciones expiradas (10s) u obtenidas con votos completos
+    if game.pending_vote:
+        # Se verifica si el tiempo expiró o si todos los humanos reales ya votaron
+        human_players = [pid for pid, p in game.players.items() if not p.get("is_npc")]
+        all_humans_voted = all(pid in game.pending_vote["votes"] for pid in human_players)
+        
+        if time.time() > game.pending_vote.get("expire_time", 0) or all_humans_voted:
+            res, pipa_msg = game.resolve_vote_pipa()
+            if res:
+                target = game.players[game.pending_vote["target"]]
+                target["pos"] = safe_pos(target["pos"] - 10, game.max_pos)
+            game.pending_vote = None
+            
+            # Solo si no hay un ataque inmediato pendiente pasamos de turno
+            if not game.pending_action:
+                game.next_turn()
+                
+            await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id,
+                text=render_game(game, f"🗳️ Votación concluida. Pipa decidió: {pipa_msg}", "vote"),
+                reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
+
+    # Si hay un evento interactivo de votación o de ataque esperando acción humana, evitamos tirar el dado automático todavía
+    if game.pending_action or game.pending_vote:
+        await asyncio.sleep(1)
+        # Re-invocamos de forma segura para validar el temporizador
+        asyncio.create_task(check_npc_turn(context, game))
+        return
 
     # 3. ACTIVACIÓN AUTOMÁTICA DEL DADO (No se traba si alguien abandona)
     game.processing = True
@@ -166,6 +189,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     game = games.get(query.message.chat_id)
     if not game: return
+
+    # MODIFICACIÓN EXCLUSIVA: Captura del voto del jugador humano real (vote_yes / vote_no)
+    if query.data in ["vote_yes", "vote_no"] and game.pending_vote:
+        user_id = query.from_user.id
+        if user_id in game.players:
+            game.pending_vote["votes"][user_id] = (query.data == "vote_yes")
+        return
 
     # El usuario solo interviene manualmente en ataques o votos si llega a tiempo
     if query.data.startswith("target_") and game.pending_action:
