@@ -20,7 +20,7 @@ from config import MAX_PLAYERS, PLAYER_EMOJIS
 from dialogos import DIALOGOS
 
 # =========================================================
-# REACCIONES Y UTILIDADES (MANTENIDAS)
+# REACCIONES Y UTILIDADES (MANTENIDAS COMPLEMENTAMENTE INTACTAS)
 # =========================================================
 from events import SPECIAL_CELLS
 
@@ -77,14 +77,13 @@ async def apply_random_event(game, player):
     return "", "default", None
 
 # =========================================================
-# LÓGICA DE DADO AUTOMÁTICO Y CONTINUIDAD
+# LÓGICA DE DADO AUTOMÁTICO Y CONTINUIDAD (CORRECCIÓN QUIRÚRGICA)
 # =========================================================
 async def check_npc_turn(context, game):
-    if game.chat_id not in games or game.processing: return
+    if game.chat_id not in games: return
     
     # 1. Resolver acciones expiradas (10s)
     if game.pending_action and time.time() > game.pending_action.get("expire_time", 0):
-        # Ejecución aleatoria si nadie eligió
         potential_victims = [pid for pid in game.order if pid != game.pending_action["attacker_id"]]
         victim_id = random.choice(potential_victims)
         target = game.players[victim_id]
@@ -114,11 +113,27 @@ async def check_npc_turn(context, game):
                 text=render_game(game, f"🗳️ Votación concluida. Pipa decidió: {pipa_msg}", "vote"),
                 reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
 
-    # Re-invocación si hay algo pendiente
+    # CORRECCIÓN DE RE-INVOCACIÓN: Si hay una acción/voto de un humano esperando tiempo, 
+    # salimos liberando el flujo correctamente sin atascar game.processing.
     if game.pending_action or game.pending_vote:
+        # SI el jugador actual es un NPC y tiene una acción de ítem pendiente, la ejecuta AL INSTANTE
+        if game.current_player().get("is_npc") and game.pending_action:
+            potential_victims = [pid for pid in game.order if pid != game.current_player_id()]
+            victim_id = random.choice(potential_victims)
+            target = game.players[victim_id]
+            target["pos"] = safe_pos(target["pos"] - 5, game.max_pos)
+            game.pending_action = None
+            game.next_turn()
+            await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id, 
+                text=render_game(game, f"🤖 El Bot decidió usar su ítem instantáneamente contra {target['name']}.", "sabotage"),
+                reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
+        
         await asyncio.sleep(1)
         asyncio.create_task(check_npc_turn(context, game))
         return
+
+    # Si ya está procesando el tiro de dado, no hacemos nada más en este ciclo
+    if game.processing: return
 
     # 3. ACTIVACIÓN AUTOMÁTICA DEL DADO
     game.processing = True
@@ -151,7 +166,7 @@ async def check_npc_turn(context, game):
         await check_npc_turn(context, game)
 
 # =========================================================
-# COMANDOS Y HANDLERS (INTACTOS CON CORRECCIÓN PUNTUAL)
+# COMANDOS Y HANDLERS (REVISADOS Y CONSERVADOS FIELMENTE)
 # =========================================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 games = {}
@@ -172,7 +187,8 @@ async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     players = rooms[chat_id]
     while len(players) < 2:
         nid = f"npc_{random.randint(100,999)}"
-        players.append({"id": nid, "name": f"Bot_{nid}", "emoji": "🤖"})
+        # ADICIÓN CRÍTICA: Se añade explícitamente "is_npc": True para que el motor reconozca al bot
+        players.append({"id": nid, "name": f"Bot_{nid}", "emoji": "🤖", "is_npc": True})
     game = MisterPipaGame(chat_id, players)
     games[chat_id] = game
     msg = await update.message.reply_text(render_game(game, "🏁 ¡COMIENZA LA CARRERA AUTOMÁTICA!"), reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
@@ -186,12 +202,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     game = games.get(query.message.chat_id)
     if not game: return
 
-    # CORRECCIÓN: Registrar voto y forzar check_npc_turn para resolver de inmediato
+    # Registrar voto y forzar check_npc_turn para resolver de inmediato
     if query.data in ["vote_yes", "vote_no"] and game.pending_vote:
         user_id = query.from_user.id
         if user_id in game.players:
             game.pending_vote["votes"][user_id] = (query.data == "vote_yes")
-            # Forzamos la comprobación inmediata sin esperar al bucle
             asyncio.create_task(check_npc_turn(context, game))
         return
 
@@ -208,4 +223,4 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("unirse", unirse))
     app.add_handler(CommandHandler("jugar", jugar))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.run_polling()
+    run_queue = app.run_polling()
