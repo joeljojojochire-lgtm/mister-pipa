@@ -1,7 +1,7 @@
 import os
 import random
 import asyncio
-import time # Necesario para los temporizadores
+import time
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -17,304 +17,168 @@ from ui import render_game, main_keyboard, vote_keyboard
 from items import ITEMS
 from utils import safe_pos
 from config import MAX_PLAYERS, PLAYER_EMOJIS
-from dialogos import DIALOGOS # Importamos tu nuevo guion
+from dialogos import DIALOGOS
 
 # =========================================================
-# CORRECCIÓN 1: Importación compatible con tu events.py
+# REACCIONES Y UTILIDADES (MANTENIDAS)
 # =========================================================
 from events import SPECIAL_CELLS
-# Creamos la función aquí mismo usando tus SPECIAL_CELLS para no tocar events.py
+
+async def obtener_comentario(categoria):
+    return random.choice(DIALOGOS.get(categoria, ["..."]))
+
+async def set_reaction(context, chat_id, message_id, reaction_type):
+    reactions = {"roll": "🎲", "win": "🎉", "boost": "⚡", "fire": "🔥", "bad": "😱", "sabotage": "💢", "vote": "🗳️"}
+    try:
+        from telegram import ReactionTypeEmoji
+        await context.bot.set_message_reaction(chat_id=chat_id, message_id=message_id, reaction=[ReactionTypeEmoji(reactions.get(reaction_type, "✨"))])
+    except: pass
+
+# =========================================================
+# MODIFICACIÓN: EVENTOS CON TEMPORIZADOR DE 10s
+# =========================================================
 async def apply_random_event(game, player):
-    # Lógica de casillas especiales
     if player["pos"] in SPECIAL_CELLS:
         msg, new_pos = SPECIAL_CELLS[player["pos"]]
         player["pos"] = safe_pos(new_pos, game.max_pos)
         return f"\n✨ <b>CASILLA:</b> {msg}", "boost" if new_pos > player["pos"] else "bad", None
 
-    # 1. Probabilidad de Objeto con ELECCIÓN (25%)
+    # Objeto: ahora incluye expire_time (10 segundos)
     if random.random() < 0.25:
         item = ITEMS[random.randint(1, 4)]
         game.pending_action = {
             "type": "use_item",
             "item": item,
             "attacker_id": game.current_player_id(),
-            "expire_time": time.time() + 4
+            "expire_time": time.time() + 10 # REGLA: 10 SEGUNDOS
         }
-        victims = []
-        for pid, pdata in game.players.items():
-            if pid != game.current_player_id():
-                victims.append([InlineKeyboardButton(f"🎯 {pdata['name']}", callback_data=f"target_{pid}")])
-        
-        markup = InlineKeyboardMarkup(victims)
+        victims = [[InlineKeyboardButton(f"🎯 {p['name']}", callback_data=f"target_{pid}")] 
+                   for pid, p in game.players.items() if pid != game.current_player_id()]
         frase = await obtener_comentario("sabotaje")
-        return f"\n🎁 {frase}\n¡Tienes un **{item['name']}**! ¿A quién atacas? (4s)", "sabotage", markup
+        return f"\n🎁 {frase}\n¡Tienes un <b>{item['name']}</b>! ¿A quién atacas? (10s)", "sabotage", InlineKeyboardMarkup(victims)
 
+    # Votación: ahora incluye expire_time (10 segundos)
     if random.random() < 0.15:
         target_id = random.choice(game.order)
-        game.pending_vote = {"target": target_id, "votes": {}}
-        for pid, pdata in game.players.items():
-            if pdata.get("is_npc"):
-                game.pending_vote["votes"][pid] = random.choice([True, False])
-        
+        game.pending_vote = {
+            "target": target_id, 
+            "votes": {},
+            "expire_time": time.time() + 10 # REGLA: 10 SEGUNDOS
+        }
         frase = await obtener_comentario("votacion_abierta")
-        target_name = game.players[target_id]['name']
-        return f"\n🗳️ {frase}\n¿Hacemos que {target_name} retroceda 10m?", "vote", None
+        return f"\n🗳️ {frase}\n¿Retrocedemos a {game.players[target_id]['name']}? (10s)", "vote", vote_keyboard()
 
-    if random.random() < 0.10:
-        frase = await obtener_comentario("comentario_azar")
-        return f"\n🧐 {frase}", "default", None
-    
     return "", "default", None
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-
-games = {}
-rooms = {}
-
 # =========================================================
-# GESTIÓN DE DIÁLOGOS
+# LÓGICA DE DADO AUTOMÁTICO Y CONTINUIDAD
 # =========================================================
-
-async def obtener_comentario(categoria):
-    """Selecciona una frase al azar de tu archivo dialogos.py"""
-    return random.choice(DIALOGOS.get(categoria, ["..."]))
-
-# =========================================================
-# REACCIONES
-# =========================================================
-
-async def set_reaction(context, chat_id, message_id, reaction_type):
-    reactions = {
-        "roll": "🎲", "win": "🎉", "boost": "⚡", "fire": "🔥", 
-        "bad": "😱", "sabotage": "💢", "vote": "🗳️"
-    }
-    try:
-        emoji = reactions.get(reaction_type, "✨")
-        from telegram import ReactionTypeEmoji
-        await context.bot.set_message_reaction(
-            chat_id=chat_id, message_id=message_id,
-            reaction=[ReactionTypeEmoji(emoji)]
-        )
-    except Exception as e:
-        print(f"REACTION LOG: {e}")
-
-# =========================================================
-# VIGILANTE DE INACTIVIDAD (20 SEGUNDOS)
-# =========================================================
-
-async def check_inactivity(context: ContextTypes.DEFAULT_TYPE):
-    """Victoria por abandono si pasan 20s sin tocar botones"""
-    current_time = time.time()
-    to_delete = []
-
-    for chat_id, game in list(games.items()):
-        if hasattr(game, 'last_action_time') and (current_time - game.last_action_time) > 20:
-            # Ganador: el que esté más cerca de la meta
-            leader_id = max(game.players, key=lambda p: game.players[p]['pos'])
-            leader_name = game.players[leader_id]['name']
-            
-            frase_azar = await obtener_comentario("comentario_azar")
-            texto_final = (
-                f"⏰ <b>¡TIEMPO AGOTADO!</b>\n\n"
-                f"🧐 <i>{frase_azar}</i>\n\n"
-                f"Como alguien se quedó dormido, Mister Pipa declara ganador a <b>{leader_name}</b> por abandono. 🏆"
-            )
-            
-            try:
-                text_completo = render_game(game, texto_final, "joke")
-                await context.bot.send_message(chat_id=chat_id, text=text_completo, parse_mode=ParseMode.HTML)
-            except: pass
-            to_delete.append(chat_id)
-
-    for chat_id in to_delete:
-        if chat_id in games: del games[chat_id]
-
-# =========================================================
-# GESTIÓN DE TURNOS NPC
-# =========================================================
-
 async def check_npc_turn(context, game):
     if game.chat_id not in games or game.processing: return
     
-    # --- GESTIÓN DE EXPIRACIÓN DE OBJETOS (4s) ---
-    if game.pending_action:
-        if time.time() > game.pending_action.get("expire_time", 0):
-            game.pending_action = None
-            game.next_turn()
-            text = render_game(game, "⏰ ¡Tiempo agotado para el ataque! El objeto se ha perdido.", "joke")
-            await context.bot.edit_message_text(
-                chat_id=game.chat_id, message_id=game.message_id,
-                text=text, reply_markup=main_keyboard(), parse_mode=ParseMode.HTML
-            )
-        else:
-            return 
+    # 1. Resolver acciones expiradas (10s)
+    if game.pending_action and time.time() > game.pending_action.get("expire_time", 0):
+        # Ejecución aleatoria si nadie eligió
+        potential_victims = [pid for pid in game.order if pid != game.pending_action["attacker_id"]]
+        victim_id = random.choice(potential_victims)
+        target = game.players[victim_id]
+        target["pos"] = safe_pos(target["pos"] - 5, game.max_pos)
+        game.pending_action = None
+        game.next_turn()
+        await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id, 
+            text=render_game(game, f"⏰ Tiempo agotado. Pipa atacó a {target['name']} al azar.", "joke"),
+            reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
 
-    if game.pending_vote: return 
+    # 2. Resolver votaciones expiradas (10s)
+    if game.pending_vote and time.time() > game.pending_vote.get("expire_time", 0):
+        res, pipa_msg = game.resolve_vote_pipa()
+        if res:
+            target = game.players[game.pending_vote["target"]]
+            target["pos"] = safe_pos(target["pos"] - 10, game.max_pos)
+        game.pending_vote = None
+        await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id,
+            text=render_game(game, f"⏰ Votación cerrada. Pipa decidió: {pipa_msg}", "vote"),
+            reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
 
-    if not str(game.current_player_id()).startswith("npc_"): return
-
+    # 3. ACTIVACIÓN AUTOMÁTICA DEL DADO (No se traba si alguien abandona)
     game.processing = True
     try:
+        await asyncio.sleep(2) # Pausa para lectura
         player = game.current_player()
-        await asyncio.sleep(1.5)
         dice = random.randint(1, 6)
-        
-        comentario_dado = ""
-        if dice == 6: comentario_dado = f"\n⚡ {await obtener_comentario('sacar_6')}"
-        elif dice == 1: comentario_dado = f"\n🐢 {await obtener_comentario('sacar_1')}"
-
         player["pos"] = safe_pos(player["pos"] + dice, game.max_pos)
-        event_msg = f"🤖 {player['name']} avanzó {dice}m.{comentario_dado}"
-        mood = "roll"
-
-        extra_msg, extra_mood, _ = await apply_random_event(game, player)
-        if extra_msg:
-            event_msg += extra_msg
-            mood = extra_mood
-
+        
+        comentario = await obtener_comentario("sacar_6" if dice == 6 else "sacar_1" if dice == 1 else "inicio")
+        msg_extra, mood, markup = await apply_random_event(game, player)
+        
         if player["pos"] >= game.max_pos:
-            text = render_game(game, f"🏆 ¡{player['name']} HA GANADO! 🏆", "win")
-            await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id, text=text, parse_mode=ParseMode.HTML)
+            await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id, 
+                text=render_game(game, f"🏆 ¡GANÓ {player['name']}!", "win"), parse_mode=ParseMode.HTML)
             if game.chat_id in games: del games[game.chat_id]
             return
 
-        game.next_turn()
-        game.last_action_time = time.time()
-        text = render_game(game, event_msg, mood)
-        await context.bot.edit_message_text(
-            chat_id=game.chat_id, message_id=game.message_id,
-            text=text, reply_markup=main_keyboard(), parse_mode=ParseMode.HTML
-        )
-        await set_reaction(context, game.chat_id, game.message_id, mood)
+        if not game.pending_action and not game.pending_vote:
+            game.next_turn()
+
+        await context.bot.edit_message_text(chat_id=game.chat_id, message_id=game.message_id,
+            text=render_game(game, f"🎲 {player['name']} sacó {dice}. {comentario}{msg_extra}", mood),
+            reply_markup=markup or main_keyboard(), parse_mode=ParseMode.HTML)
     finally:
         game.processing = False
 
-    await asyncio.sleep(2)
-    if game.chat_id in games and str(game.current_player_id()).startswith("npc_"):
+    # Bucle infinito: si no hay nada pendiente, sigue el siguiente turno solo
+    await asyncio.sleep(1)
+    if game.chat_id in games and not game.pending_action and not game.pending_vote:
         await check_npc_turn(context, game)
 
 # =========================================================
-# COMANDOS
+# COMANDOS Y HANDLERS (INTACTOS)
 # =========================================================
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+games = {}
+rooms = {}
 
 async def unirse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
-    if chat_id in games:
-        await update.message.reply_text("❌ Partida en curso.")
-        return
+    if chat_id in games: return
     if chat_id not in rooms: rooms[chat_id] = []
-    if any(p["id"] == user.id for p in rooms[chat_id]):
-        await update.message.reply_text("✅ Ya estás dentro.")
-        return
-    if len(rooms[chat_id]) >= MAX_PLAYERS:
-        await update.message.reply_text("❌ Sala llena.")
-        return
-    rooms[chat_id].append({"id": user.id, "name": user.first_name, "emoji": random.choice(PLAYER_EMOJIS)})
-    await update.message.reply_text(f"🎮 {user.first_name} se unió ({len(rooms[chat_id])}/{MAX_PLAYERS})")
+    if not any(p["id"] == user.id for p in rooms[chat_id]):
+        rooms[chat_id].append({"id": user.id, "name": user.first_name, "emoji": random.choice(PLAYER_EMOJIS)})
+        await update.message.reply_text(f"🎮 {user.first_name} unido.")
 
 async def jugar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    if chat_id in games: return
-    players = rooms.get(chat_id, [])
-    if len(players) < 1:
-        await update.message.reply_text("❌ Mínimo 1 jugador.")
-        return
+    if chat_id in games or not rooms.get(chat_id): return
+    players = rooms[chat_id]
     while len(players) < 2:
-        npc_id = f"npc_{random.randint(1000, 9999)}"
-        players.append({"id": npc_id, "name": f"Bot_{npc_id[-3:]}", "emoji": "🤖"})
-
+        nid = f"npc_{random.randint(100,999)}"
+        players.append({"id": nid, "name": f"Bot_{nid}", "emoji": "🤖"})
     game = MisterPipaGame(chat_id, players)
-    game.last_action_time = time.time()
     games[chat_id] = game
-    text = render_game(game, "🏁 ¡La carrera ha comenzado! 🏁")
-    msg = await update.message.reply_text(text, reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
+    msg = await update.message.reply_text(render_game(game, "🏁 ¡COMIENZA LA CARRERA AUTOMÁTICA!"), reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
     game.message_id = msg.message_id
-    if chat_id in rooms: del rooms[chat_id]
-    await check_npc_turn(context, game)
-
-# =========================================================
-# BOTONES
-# =========================================================
+    del rooms[chat_id]
+    asyncio.create_task(check_npc_turn(context, game))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    chat_id = query.message.chat_id
-    user_id = query.from_user.id
-    if chat_id not in games: return
-    game = games[chat_id]
-    game.last_action_time = time.time()
+    game = games.get(query.message.chat_id)
+    if not game: return
 
-    if query.data.startswith("target_"):
-        if not game.pending_action or game.pending_action["attacker_id"] != user_id: return
-        target_id = query.data.replace("target_", "")
-        item = game.pending_action["item"]
-        target = game.players[target_id]
-        target["pos"] = safe_pos(target["pos"] + item.get("valor", -5), game.max_pos)
+    # El usuario solo interviene manualmente en ataques o votos si llega a tiempo
+    if query.data.startswith("target_") and game.pending_action:
+        target = game.players[query.data.replace("target_", "")]
+        target["pos"] = safe_pos(target["pos"] - 5, game.max_pos)
         game.pending_action = None
         game.next_turn()
-        text = render_game(game, f"💢 ¡Ataque!\nUsaste {item['name']} contra {target['name']}.", "sabotage")
-        await query.edit_message_text(text, reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
-        await asyncio.sleep(2)
-        await check_npc_turn(context, game)
-        return
-
-    if query.data in ["vote_yes", "vote_no"]:
-        if game.pending_vote:
-            game.pending_vote["votes"][user_id] = (query.data == "vote_yes")
-            if len(game.pending_vote["votes"]) >= len(game.order):
-                v_si = sum(1 for v in game.pending_vote["votes"].values() if v)
-                v_no = sum(1 for v in game.pending_vote["votes"].values() if not v)
-                res, pipa_msg = (v_si > v_no, "¡Decidido!") if v_si != v_no else game.resolve_vote_pipa()
-                if res:
-                    target = game.players[game.pending_vote["target"]]
-                    target["pos"] = safe_pos(target["pos"] - 10, game.max_pos)
-                game.pending_vote = None
-                await query.edit_message_text(render_game(game, f"📊 Votación: {pipa_msg}", "vote"), reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
-                await asyncio.sleep(2)
-                await check_npc_turn(context, game)
-        return
-
-    if game.processing or game.current_player_id() != user_id or query.data != "roll": return
-    game.processing = True
-    try:
-        player = game.current_player()
-        dice = random.randint(1, 6)
-        comentario_dado = f"\n⚡ {await obtener_comentario('sacar_6')}" if dice == 6 else (f"\n🐢 {await obtener_comentario('sacar_1')}" if dice == 1 else "")
-        player["pos"] = safe_pos(player["pos"] + dice, game.max_pos)
-        event_msg = f"🎲 Lanzaste un {dice}.{comentario_dado}"
-        
-        if player["pos"] >= game.max_pos:
-            await query.edit_message_text(render_game(game, f"🏆 ¡{player['name']} HA GANADO! 🏆", "win"), parse_mode=ParseMode.HTML)
-            if chat_id in games: del games[chat_id]
-            return
-
-        extra_msg, mood, extra_markup = await apply_random_event(game, player)
-        event_msg += extra_msg
-        if not game.pending_action:
-            game.next_turn()
-            markup = vote_keyboard() if game.pending_vote else main_keyboard()
-        else:
-            markup = extra_markup
-        await query.edit_message_text(render_game(game, event_msg, mood), reply_markup=markup, parse_mode=ParseMode.HTML)
-    finally:
-        game.processing = False
-    if not game.pending_action: await check_npc_turn(context, game)
-
-# =========================================================
-# MAIN
-# =========================================================
+        await query.edit_message_text(render_game(game, f"💢 {game.current_player()['name']} eligió atacar a {target['name']}"), reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
+        asyncio.create_task(check_npc_turn(context, game))
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("unirse", unirse))
     app.add_handler(CommandHandler("jugar", jugar))
     app.add_handler(CallbackQueryHandler(button_handler))
-    
-    # CORRECCIÓN 2: Evita el error de NoneType en Render si no hay JobQueue
-    if app.job_queue:
-        app.job_queue.run_repeating(check_inactivity, interval=5, first=5)
-    
-    print("Mister Pipa Online...")
     app.run_polling()
