@@ -97,7 +97,6 @@ async def check_npc_turn(context, game):
 
     # 2. Resolver votaciones expiradas (10s) u obtenidas con votos completos
     if game.pending_vote:
-        # Se verifica si el tiempo expiró o si todos los humanos reales ya votaron
         human_players = [pid for pid, p in game.players.items() if not p.get("is_npc")]
         all_humans_voted = all(pid in game.pending_vote["votes"] for pid in human_players)
         
@@ -108,7 +107,6 @@ async def check_npc_turn(context, game):
                 target["pos"] = safe_pos(target["pos"] - 10, game.max_pos)
             game.pending_vote = None
             
-            # Solo si no hay un ataque inmediato pendiente pasamos de turno
             if not game.pending_action:
                 game.next_turn()
                 
@@ -116,17 +114,16 @@ async def check_npc_turn(context, game):
                 text=render_game(game, f"🗳️ Votación concluida. Pipa decidió: {pipa_msg}", "vote"),
                 reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
 
-    # Si hay un evento interactivo de votación o de ataque esperando acción humana, evitamos tirar el dado automático todavía
+    # Re-invocación si hay algo pendiente
     if game.pending_action or game.pending_vote:
         await asyncio.sleep(1)
-        # Re-invocamos de forma segura para validar el temporizador
         asyncio.create_task(check_npc_turn(context, game))
         return
 
-    # 3. ACTIVACIÓN AUTOMÁTICA DEL DADO (No se traba si alguien abandona)
+    # 3. ACTIVACIÓN AUTOMÁTICA DEL DADO
     game.processing = True
     try:
-        await asyncio.sleep(2) # Pausa para lectura
+        await asyncio.sleep(2) 
         player = game.current_player()
         dice = random.randint(1, 6)
         player["pos"] = safe_pos(player["pos"] + dice, game.max_pos)
@@ -149,13 +146,12 @@ async def check_npc_turn(context, game):
     finally:
         game.processing = False
 
-    # Bucle infinito: si no hay nada pendiente, sigue el siguiente turno solo
     await asyncio.sleep(1)
     if game.chat_id in games and not game.pending_action and not game.pending_vote:
         await check_npc_turn(context, game)
 
 # =========================================================
-# COMANDOS Y HANDLERS (INTACTOS)
+# COMANDOS Y HANDLERS (INTACTOS CON CORRECCIÓN PUNTUAL)
 # =========================================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 games = {}
@@ -190,14 +186,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     game = games.get(query.message.chat_id)
     if not game: return
 
-    # MODIFICACIÓN EXCLUSIVA: Captura del voto del jugador humano real (vote_yes / vote_no)
+    # CORRECCIÓN: Registrar voto y forzar check_npc_turn para resolver de inmediato
     if query.data in ["vote_yes", "vote_no"] and game.pending_vote:
         user_id = query.from_user.id
         if user_id in game.players:
             game.pending_vote["votes"][user_id] = (query.data == "vote_yes")
+            # Forzamos la comprobación inmediata sin esperar al bucle
+            asyncio.create_task(check_npc_turn(context, game))
         return
 
-    # El usuario solo interviene manualmente en ataques o votos si llega a tiempo
     if query.data.startswith("target_") and game.pending_action:
         target = game.players[query.data.replace("target_", "")]
         target["pos"] = safe_pos(target["pos"] - 5, game.max_pos)
