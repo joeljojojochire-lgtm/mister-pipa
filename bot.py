@@ -9,6 +9,8 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
+    MessageHandler,  # Mantenido intacto - Añadido para procesar imágenes
+    filters,          # Mantenido intacto - Añadido para filtrar imágenes
 )
 from telegram.constants import ParseMode
 
@@ -200,10 +202,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(render_game(game, f"💢 Atacaste a {target['name']}"), reply_markup=main_keyboard(), parse_mode=ParseMode.HTML)
         asyncio.create_task(check_npc_turn(context, game))
 
+# =========================================================
+# UTILERÍA ADICIONAL (CAPTURADOR DE IMAGE ID)
+# =========================================================
+async def obtener_image_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    foto = update.message.photo[-1]
+    file_id = foto.file_id
+    await update.message.reply_text(
+        f"🖼️ <b>¡Imagen recibida!</b>\n\n"
+        f"Aquí tienes el ID de Telegram para usar en tu código:\n"
+        f"<code>{file_id}</code>",
+        parse_mode=ParseMode.HTML
+    )
+
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("unirse", unirse))
     app.add_handler(CommandHandler("jugar", jugar))
     app.add_handler(CommandHandler("final", finalizar_partida))
     app.add_handler(CallbackQueryHandler(button_handler))
+    
+    # Manejador específico para capturar las fotos enviadas por los usuarios
+    app.add_handler(MessageHandler(filters.PHOTO, obtener_image_id))
+    
     app.run_polling()
